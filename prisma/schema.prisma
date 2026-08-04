@@ -1,0 +1,3114 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  wallet    String   @unique
+  createdAt DateTime @default(now())
+
+  campaigns Campaign[]
+  donations Donation[]
+
+  @@map("users")
+}
+
+model Campaign {
+  id              String               @id @default(cuid())
+  title           String
+  description     String
+  targetAmount    Float
+  raisedAmount    Float                @default(0)
+  currency        String               @default("ALGO")
+  category        String
+  status          CampaignStatus       @default(PENDING)
+  creatorId       String
+  creatorWallet   String
+  escrowAddress   String?              @unique
+  appId           Int?                 @unique // Algorand Application ID
+  createdAt       DateTime             @default(now())
+  endDate         DateTime
+  impactGoal      String
+  imageUrl        String?
+  withdrawnAmount Float?
+  withdrawnAt     DateTime?
+  withdrawals     CampaignWithdrawal[]
+
+  creator       User             @relation(fields: [creatorId], references: [id])
+  donations     Donation[]
+  updates       CampaignUpdate[]
+  escrowPayouts EscrowPayout[]
+
+  @@map("campaigns")
+}
+
+model Donation {
+  id              String         @id @default(cuid())
+  amount          Float
+  currency        String
+  donorId         String?
+  donorWallet     String
+  campaignId      String
+  transactionHash String?        @unique
+  status          DonationStatus @default(PENDING)
+  createdAt       DateTime       @default(now())
+  confirmedAt     DateTime?
+
+  donor    User?    @relation(fields: [donorId], references: [id])
+  campaign Campaign @relation(fields: [campaignId], references: [id])
+
+  @@map("donations")
+}
+
+model CampaignUpdate {
+  id         String   @id @default(cuid())
+  title      String
+  content    String
+  campaignId String
+  createdAt  DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id])
+}
+
+model EscrowPayout {
+  id              String       @id @default(cuid())
+  campaignId      String
+  amount          Float
+  transactionHash String       @unique
+  status          PayoutStatus @default(PENDING)
+  createdAt       DateTime     @default(now())
+  processedAt     DateTime?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id])
+
+  @@map("escrow_payouts")
+}
+
+enum CampaignStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  FAILED
+}
+
+enum DonationStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  REFUNDED
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+model CampaignWithdrawal {
+  id                  String           @id @default(cuid())
+  campaignId          String
+  amount              Float
+  recipientWallet     String
+  transactionHash     String?
+  unsignedTransaction String? // Store the unsigned transaction for signing
+  status              WithdrawalStatus @default(PENDING_SIGNATURE)
+  createdAt           DateTime         @default(now())
+  completedAt         DateTime?
+
+  // Relations
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@map("campaign_withdrawals")
+}
+
+enum WithdrawalStatus {
+  PENDING_SIGNATURE
+  PENDING_CONFIRMATION
+  COMPLETED
+  FAILED
+}
+
+model Organization {
+  id        String             @id @default(cuid())
+  name      String
+  slug      String             @unique
+  status    OrganizationStatus @default(ACTIVE)
+  createdAt DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime           @updatedAt @db.Timestamptz(3)
+
+  memberships              OrganizationMembership[]
+  facilities               Facility[]
+  programmes               Programme[]
+  caregivers               Caregiver[]
+  children                 Child[]
+  auditEvents              AuditEvent[]
+  credentials              ChildCredential[]
+  immunizations            ImmunizationRecord[]
+  growthMeasurements       GrowthMeasurement[]
+  clinicalAlerts           ClinicalAlert[]
+  allergies                AllergyRecord[]
+  appointments             Appointment[]
+  consentGrants            ConsentGrant[]
+  consentScopes            ConsentScope[]
+  disclosureEvents         DisclosureEvent[]
+  emergencyAccesses        EmergencyAccess[]
+  climateProfiles          ClimateProfile[]
+  climateEvents            ClimateEvent[]
+  affectedAreas            AffectedArea[]
+  worklists                BeneficiaryWorklist[]
+  worklistEntries          WorklistEntry[]
+  serviceDeliveries        ServiceDelivery[]
+  referrals                Referral[]
+  devices                  FieldDevice[]
+  syncBatches              SyncBatch[]
+  syncOperations           SyncOperation[]
+  outboxEvents             OutboxEvent[]
+  rewardCampaigns          RewardCampaign[]
+  rewardAccounts           RewardAccount[]
+  rewardTransactions       RewardTransaction[]
+  rewardLedgerEntries      RewardLedgerEntry[]
+  rewardGrants             RewardGrant[]
+  merchants                Merchant[]
+  rewardReservations       RewardReservation[]
+  redemptions              RewardRedemption[]
+  settlementBatches        SettlementBatch[]
+  merchantMemberships      MerchantMembership[]
+  notificationPreferences  NotificationPreference[]
+  notificationTemplates    NotificationTemplate[]
+  notificationMessages     NotificationMessage[]
+  notificationAttempts     NotificationDeliveryAttempt[]
+  integrationConnections   IntegrationConnection[]
+  integrationMappings      IntegrationMapping[]
+  integrationJobs          IntegrationJob[]
+  integrationRecords       IntegrationExchangeRecord[]
+  reconciliationRuns       IntegrationReconciliationRun[]
+  integrationImportStaging IntegrationImportStaging[]
+  analyticsPolicy          AnalyticsPublicationPolicy?
+  analyticsRuns            AnalyticsGenerationRun[]
+  aggregateMetrics         AggregateMetricSnapshot[]
+  retentionPolicies        DataRetentionPolicy[]
+  retentionRuns            RetentionExecutionRun[]
+  legalHolds               LegalHold[]
+  dataSubjectRequests      DataSubjectRequest[]
+  localizationContent      LocalizationContent[]
+  vaccineScheduleRules     VaccineScheduleRule[]
+  ussdSessions             UssdSession[]
+  ussdPhoneRoutes          UssdPhoneRoute[]
+  ussdFacilityDirectory    UssdFacilityDirectory[]
+  ussdOtpChallenges        UssdOtpChallenge[]
+  appointmentResponses     AppointmentCaregiverResponse[]
+  ussdCallbackRequests     UssdCallbackRequest[]
+  nfcCardSupportRequests   NfcCardSupportRequest[]
+  ussdConsentRequests      UssdConsentRequest[]
+  programmeInterests       ProgrammeInterest[]
+  deliveryConfirmations    ServiceDeliveryConfirmation[]
+  redemptionConfirmations RewardRedemptionConfirmation[]
+  climateAssistanceRequests ClimateAssistanceRequest[]
+
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id             String              @id @default(cuid())
+  organizationId String
+  subjectId      String
+  role           OrganizationRole
+  status         MembershipStatus    @default(ACTIVE)
+  scopeMode      MembershipScopeMode @default(GLOBAL)
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization    Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  facilityScopes  MembershipFacilityScope[]
+  programmeScopes MembershipProgrammeScope[]
+
+  @@unique([organizationId, subjectId])
+  @@unique([id, organizationId])
+  @@index([subjectId, status])
+  @@map("organization_memberships")
+}
+
+model Facility {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  name               String
+  code               String
+  administrativeArea String?
+  address             String?
+  phone               String?
+  openingHours        Json?
+  programmeCategories Json?
+  latitude            Decimal? @db.Decimal(9, 6)
+  longitude           Decimal? @db.Decimal(9, 6)
+  isTemporary         Boolean  @default(false)
+  temporaryUntil      DateTime? @db.Timestamptz(3)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(3)
+
+  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  immunizations      ImmunizationRecord[]
+  growthMeasurements GrowthMeasurement[]
+  appointments       Appointment[]
+  membershipScopes   MembershipFacilityScope[]
+  ussdDirectory      UssdFacilityDirectory?
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@map("facilities")
+}
+
+model Programme {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  isActive       Boolean   @default(true)
+  startsAt       DateTime? @db.Timestamptz(3)
+  endsAt         DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+
+  organization         Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  immunizations        ImmunizationRecord[]
+  worklists            BeneficiaryWorklist[]
+  rewardCampaigns      RewardCampaign[]
+  membershipScopes     MembershipProgrammeScope[]
+  vaccineScheduleRules VaccineScheduleRule[]
+  interests            ProgrammeInterest[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@map("programmes")
+}
+
+model MembershipFacilityScope {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  membershipId        String
+  facilityId          String
+  assignedBySubjectId String
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+
+  membership OrganizationMembership @relation(fields: [membershipId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  facility   Facility               @relation(fields: [facilityId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([membershipId, facilityId])
+  @@index([organizationId, facilityId])
+  @@map("membership_facility_scopes")
+}
+
+model MembershipProgrammeScope {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  membershipId        String
+  programmeId         String
+  assignedBySubjectId String
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+
+  membership OrganizationMembership @relation(fields: [membershipId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  programme  Programme              @relation(fields: [programmeId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([membershipId, programmeId])
+  @@index([organizationId, programmeId])
+  @@map("membership_programme_scopes")
+}
+
+model Caregiver {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  firstName          String
+  lastName           String
+  preferredLanguage  String   @default("en")
+  subjectId          String?
+  phone              String?
+  phoneNormalized    String?
+  phoneVerifiedAt    DateTime? @db.Timestamptz(3)
+  ussdPinHash        String?
+  ussdPinFailedAttempts Int    @default(0)
+  ussdPinLockedUntil DateTime? @db.Timestamptz(3)
+  ussdPinChangedAt   DateTime? @db.Timestamptz(3)
+  email              String?
+  createdBySubjectId String
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(3)
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  children             ChildCaregiver[]
+  consentGrants        ConsentGrant[]
+  rewardAccount        RewardAccount?
+  notificationMessages NotificationMessage[]
+  dataSubjectRequests  DataSubjectRequest[]
+  ussdSessions         UssdSession[]
+  ussdPhoneRoutes      UssdPhoneRoute[]
+  ussdOtpChallenges    UssdOtpChallenge[]
+  appointmentResponses AppointmentCaregiverResponse[]
+  ussdCallbackRequests UssdCallbackRequest[]
+  nfcCardSupportRequests NfcCardSupportRequest[]
+  ussdConsentRequests  UssdConsentRequest[]
+  programmeInterests   ProgrammeInterest[]
+  deliveryConfirmations ServiceDeliveryConfirmation[]
+  redemptionConfirmations RewardRedemptionConfirmation[]
+  climateAssistanceRequests ClimateAssistanceRequest[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, subjectId])
+  @@unique([organizationId, phoneNormalized])
+  @@index([organizationId, lastName, firstName])
+  @@map("caregivers")
+}
+
+model Child {
+  id                 String      @id @default(cuid())
+  organizationId     String
+  medfinetId         String      @unique
+  firstName          String
+  lastName           String
+  dateOfBirth        DateTime    @db.Date
+  sex                ChildSex
+  status             ChildStatus @default(ACTIVE)
+  createdBySubjectId String
+  createdAt          DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime    @updatedAt @db.Timestamptz(3)
+
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregivers          ChildCaregiver[]
+  credentials         ChildCredential[]
+  immunizations       ImmunizationRecord[]
+  growthMeasurements  GrowthMeasurement[]
+  clinicalAlerts      ClinicalAlert[]
+  allergies           AllergyRecord[]
+  appointments        Appointment[]
+  consentGrants       ConsentGrant[]
+  disclosureEvents    DisclosureEvent[]
+  emergencyAccesses   EmergencyAccess[]
+  climateProfile      ClimateProfile?
+  worklistEntries     WorklistEntry[]
+  serviceDeliveries   ServiceDelivery[]
+  referrals           Referral[]
+  rewardGrants        RewardGrant[]
+  legalHolds          LegalHold[]
+  dataSubjectRequests DataSubjectRequest[]
+  identityAmendments  ChildIdentityAmendment[]
+  identifiers         ChildIdentifier[]
+  appointmentResponses AppointmentCaregiverResponse[]
+  ussdCallbackRequests UssdCallbackRequest[]
+  nfcCardSupportRequests NfcCardSupportRequest[]
+  ussdConsentRequests  UssdConsentRequest[]
+  programmeInterests   ProgrammeInterest[]
+  deliveryConfirmations ServiceDeliveryConfirmation[]
+  climateAssistanceRequests ClimateAssistanceRequest[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, lastName, firstName])
+  @@index([organizationId, dateOfBirth])
+  @@map("children")
+}
+
+model ChildCaregiver {
+  id                  String                @id @default(cuid())
+  organizationId      String
+  childId             String
+  caregiverId         String
+  relationship        CaregiverRelationship
+  isPrimary           Boolean               @default(false)
+  hasConsentAuthority Boolean               @default(false)
+  createdAt           DateTime              @default(now()) @db.Timestamptz(3)
+
+  child     Child     @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  caregiver Caregiver @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([childId, caregiverId])
+  @@index([organizationId, childId])
+  @@index([organizationId, caregiverId])
+  @@map("child_caregivers")
+}
+
+model ChildIdentifier {
+  id                    String                @id @default(cuid())
+  organizationId        String
+  childId               String
+  system                String
+  value                 String
+  status                ChildIdentifierStatus @default(PENDING)
+  isPrimary             Boolean               @default(false)
+  evidenceReference     String?
+  createdBySubjectId    String
+  verifiedBySubjectId   String?
+  verifiedAt            DateTime?             @db.Timestamptz(3)
+  revokedBySubjectId    String?
+  revokedAt             DateTime?             @db.Timestamptz(3)
+  revocationReason      String?
+  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(3)
+
+  child Child @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, system, value])
+  @@index([organizationId, childId, status])
+  @@map("child_identifiers")
+}
+
+model ChildIdentityAmendment {
+  id                    String                  @id @default(cuid())
+  organizationId        String
+  childId               String
+  status                IdentityAmendmentStatus @default(PENDING)
+  reason                String
+  proposedData          Json
+  previousData          Json?
+  requestedBySubjectId  String
+  requestedAt           DateTime                @default(now()) @db.Timestamptz(3)
+  reviewedBySubjectId   String?
+  reviewedAt            DateTime?               @db.Timestamptz(3)
+  reviewReason          String?
+  appliedAt             DateTime?               @db.Timestamptz(3)
+  createdAt             DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime                @updatedAt @db.Timestamptz(3)
+
+  child Child @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, childId, status, requestedAt])
+  @@map("child_identity_amendments")
+}
+
+model AuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorSubjectId String
+  action         String
+  entityType     String
+  entityId       String
+  purpose        String
+  metadata       Json?
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entityType, entityId])
+  @@index([actorSubjectId, createdAt])
+  @@map("audit_events")
+}
+
+model ChildCredential {
+  id                   String           @id @default(cuid())
+  organizationId       String
+  childId              String
+  tokenHash            String           @unique
+  kind                 CredentialKind
+  status               CredentialStatus @default(ACTIVE)
+  issuedBySubjectId    String
+  expiresAt            DateTime?        @db.Timestamptz(3)
+  revokedAt            DateTime?        @db.Timestamptz(3)
+  revokedReason        String?
+  replacesCredentialId String?
+  lastScannedAt        DateTime?        @db.Timestamptz(3)
+  createdAt            DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime         @updatedAt @db.Timestamptz(3)
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child             @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  scans        CredentialScan[]
+  replaces     ChildCredential?  @relation("CredentialReplacement", fields: [replacesCredentialId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  replacements ChildCredential[] @relation("CredentialReplacement")
+  nfcBinding   NfcCredentialBinding?
+  cardSupportRequests NfcCardSupportRequest[]
+
+  @@unique([id, organizationId])
+  @@unique([replacesCredentialId, organizationId])
+  @@index([organizationId, childId, status])
+  @@map("child_credentials")
+}
+
+model NfcCredentialBinding {
+  id                       String           @id @default(cuid())
+  organizationId           String
+  credentialId             String
+  publicId                 String           @unique
+  hardwareFamily           String           @default("NTAG_215")
+  status                   NfcBindingStatus @default(PENDING)
+  uidHash                  String?
+  personalizationNonceHash String
+  provisioningExpiresAt    DateTime         @db.Timestamptz(3)
+  lastCounter              Int              @default(-1)
+  originalitySignatureHash String?
+  originalityVerifiedAt    DateTime?        @db.Timestamptz(3)
+  preparedAt                DateTime?        @db.Timestamptz(3)
+  preparedBySubjectId       String?
+  writeProtectedAt         DateTime?        @db.Timestamptz(3)
+  configurationLockedAt    DateTime?        @db.Timestamptz(3)
+  activatedAt              DateTime?        @db.Timestamptz(3)
+  activatedBySubjectId     String?
+  failedAt                 DateTime?        @db.Timestamptz(3)
+  failureReason            String?
+  createdAt                DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime         @updatedAt @db.Timestamptz(3)
+
+  credential ChildCredential @relation(fields: [credentialId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  scanChallenges NfcScanChallenge[]
+
+  @@unique([id, organizationId])
+  @@unique([credentialId, organizationId])
+  @@unique([organizationId, uidHash])
+  @@index([organizationId, status, createdAt])
+  @@map("nfc_credential_bindings")
+}
+
+model NfcPublicRoute {
+  publicId       String   @id
+  organizationId String
+  bindingId      String   @unique
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("nfc_public_routes")
+}
+
+model NfcScanChallenge {
+  id             String        @id @default(cuid())
+  organizationId String
+  bindingId      String
+  tokenHash      String        @unique
+  actorSubjectId String
+  deviceId       String
+  status         NfcChallengeStatus @default(PENDING)
+  expiresAt      DateTime      @db.Timestamptz(3)
+  consumedAt     DateTime?     @db.Timestamptz(3)
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime      @updatedAt @db.Timestamptz(3)
+
+  binding NfcCredentialBinding @relation(fields: [bindingId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, expiresAt])
+  @@map("nfc_scan_challenges")
+}
+
+model CredentialScan {
+  id             String   @id @default(cuid())
+  organizationId String
+  credentialId   String
+  actorSubjectId String
+  purpose        String
+  outcome        String
+  deviceId       String?
+  scannedAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  credential ChildCredential @relation(fields: [credentialId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, credentialId, scannedAt])
+  @@map("credential_scans")
+}
+
+model ImmunizationRecord {
+  id                     String               @id @default(cuid())
+  organizationId         String
+  childId                String
+  facilityId             String?
+  programmeId            String?
+  vaccineCode            String
+  doseNumber             Int
+  administeredAt         DateTime             @db.Timestamptz(3)
+  lotNumber              String?
+  route                  String?
+  site                   String?
+  notes                  String?
+  sourceOperationId      String?
+  administeringSubjectId String
+  status                 ClinicalRecordStatus @default(ACTIVE)
+  createdAt              DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime             @updatedAt @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child               @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  facility     Facility?           @relation(fields: [facilityId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  programme    Programme?          @relation(fields: [programmeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  amendments   ClinicalAmendment[]
+
+  @@unique([organizationId, sourceOperationId])
+  @@unique([id, organizationId])
+  @@index([organizationId, childId, administeredAt])
+  @@map("immunization_records")
+}
+
+model GrowthMeasurement {
+  id                   String               @id @default(cuid())
+  organizationId       String
+  childId              String
+  facilityId           String?
+  measuredAt           DateTime             @db.Timestamptz(3)
+  weightGrams          Int?
+  heightMillimeters    Int?
+  muacMillimeters      Int?
+  vitaminAAdministered Boolean              @default(false)
+  oedemaPresent        Boolean              @default(false)
+  notes                String?
+  sourceOperationId    String?
+  recordedBySubjectId  String
+  status               ClinicalRecordStatus @default(ACTIVE)
+  createdAt            DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child               @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  facility     Facility?           @relation(fields: [facilityId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  amendments   ClinicalAmendment[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, sourceOperationId])
+  @@index([organizationId, childId, measuredAt])
+  @@map("growth_measurements")
+}
+
+model ClinicalAlert {
+  id                  String        @id @default(cuid())
+  organizationId      String
+  childId             String
+  category            String
+  severity            AlertSeverity
+  summary             String
+  emergencyVisible    Boolean       @default(false)
+  status              AlertStatus   @default(ACTIVE)
+  createdBySubjectId  String
+  resolvedBySubjectId String?
+  resolvedAt          DateTime?     @db.Timestamptz(3)
+  createdAt           DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime      @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, childId, status])
+  @@map("clinical_alerts")
+}
+
+model AllergyRecord {
+  id                  String             @id @default(cuid())
+  organizationId      String
+  childId             String
+  substanceCode       String?
+  substanceDisplay    String
+  reaction            String?
+  severity            AlertSeverity
+  criticality         AllergyCriticality
+  status              AllergyStatus      @default(ACTIVE)
+  recordedBySubjectId String
+  resolvedBySubjectId String?
+  resolvedAt          DateTime?          @db.Timestamptz(3)
+  resolutionReason    String?
+  sourceOperationId   String?
+  createdAt           DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, sourceOperationId])
+  @@index([organizationId, childId, status])
+  @@map("allergy_records")
+}
+
+model VaccineScheduleRule {
+  id                  String             @id @default(cuid())
+  organizationId      String
+  programmeId         String?
+  vaccineCode         String
+  doseNumber          Int
+  minimumAgeDays      Int
+  recommendedAgeDays  Int
+  maximumAgeDays      Int?
+  minimumIntervalDays Int?
+  version             Int
+  status              ClinicalRuleStatus @default(DRAFT)
+  createdBySubjectId  String
+  approvedBySubjectId String?
+  approvedAt          DateTime?          @db.Timestamptz(3)
+  createdAt           DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  programme    Programme?   @relation(fields: [programmeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([organizationId, programmeId, vaccineCode, doseNumber, version])
+  @@unique([id, organizationId])
+  @@index([organizationId, programmeId, status, vaccineCode, doseNumber])
+  @@map("vaccine_schedule_rules")
+}
+
+model Appointment {
+  id                 String            @id @default(cuid())
+  organizationId     String
+  childId            String
+  facilityId         String?
+  kind               String
+  scheduledFor       DateTime          @db.Timestamptz(3)
+  status             AppointmentStatus @default(SCHEDULED)
+  notes              String?
+  sourceOperationId  String?
+  createdBySubjectId String
+  createdAt          DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime          @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  facility     Facility?    @relation(fields: [facilityId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  caregiverResponses AppointmentCaregiverResponse[]
+
+  @@unique([organizationId, sourceOperationId])
+  @@unique([id, organizationId])
+  @@index([organizationId, childId, scheduledFor])
+  @@index([organizationId, scheduledFor, status])
+  @@map("appointments")
+}
+
+model ClinicalAmendment {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  immunizationId      String?
+  growthMeasurementId String?
+  reason              String
+  previousData        Json
+  replacementData     Json
+  amendedBySubjectId  String
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+
+  immunization      ImmunizationRecord? @relation(fields: [immunizationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  growthMeasurement GrowthMeasurement?  @relation(fields: [growthMeasurementId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@map("clinical_amendments")
+}
+
+model ConsentGrant {
+  id                   String               @id @default(cuid())
+  organizationId       String
+  childId              String
+  grantedByCaregiverId String
+  recipientType        ConsentRecipientType
+  recipientId          String
+  purpose              String
+  legalBasis           String
+  policyVersion        String
+  captureMethod        String
+  evidence             Json?
+  status               ConsentStatus        @default(ACTIVE)
+  version              Int                  @default(1)
+  startsAt             DateTime             @default(now()) @db.Timestamptz(3)
+  expiresAt            DateTime?            @db.Timestamptz(3)
+  withdrawnAt          DateTime?            @db.Timestamptz(3)
+  withdrawnBySubjectId String?
+  withdrawalReason     String?
+  createdBySubjectId   String
+  createdAt            DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @db.Timestamptz(3)
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child          @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  caregiver    Caregiver      @relation(fields: [grantedByCaregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  scopes       ConsentScope[]
+  ussdRequest  UssdConsentRequest?
+
+  @@unique([id, organizationId])
+  @@index([organizationId, childId, status])
+  @@index([organizationId, recipientType, recipientId, purpose, status])
+  @@map("consent_grants")
+}
+
+model ConsentScope {
+  id             String              @id @default(cuid())
+  organizationId String
+  consentGrantId String
+  category       ConsentDataCategory
+  access         ConsentAccess
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  consentGrant ConsentGrant @relation(fields: [consentGrantId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([consentGrantId, category])
+  @@index([organizationId, category, access])
+  @@map("consent_scopes")
+}
+
+model DisclosureEvent {
+  id                String               @id @default(cuid())
+  organizationId    String
+  childId           String
+  actorSubjectId    String
+  recipientType     ConsentRecipientType
+  recipientId       String
+  purpose           String
+  requestedScopes   Json
+  decision          DisclosureDecision
+  reasonCode        String
+  consentGrantId    String?
+  emergencyAccessId String?
+  requestId         String?
+  createdAt         DateTime             @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, childId, createdAt])
+  @@index([organizationId, actorSubjectId, createdAt])
+  @@index([organizationId, decision, createdAt])
+  @@map("disclosure_events")
+}
+
+model EmergencyAccess {
+  id                    String                @id @default(cuid())
+  organizationId        String
+  childId               String
+  actorSubjectId        String
+  reasonCode            String
+  justification         String
+  status                EmergencyAccessStatus @default(ACTIVE)
+  reviewStatus          EmergencyReviewStatus @default(PENDING)
+  stepUpAuthenticatedAt DateTime              @db.Timestamptz(3)
+  activatedAt           DateTime              @default(now()) @db.Timestamptz(3)
+  expiresAt             DateTime              @db.Timestamptz(3)
+  revokedAt             DateTime?             @db.Timestamptz(3)
+  revokedBySubjectId    String?
+  reviewerSubjectId     String?
+  reviewedAt            DateTime?             @db.Timestamptz(3)
+  reviewNotes           String?
+  createdAt             DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime              @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, childId, status, expiresAt])
+  @@index([organizationId, actorSubjectId, status, expiresAt])
+  @@index([organizationId, reviewStatus, createdAt])
+  @@map("emergency_accesses")
+}
+
+model ClimateProfile {
+  id                     String             @id @default(cuid())
+  organizationId         String
+  childId                String
+  administrativeAreaCode String
+  vulnerability          VulnerabilityLevel
+  displaced              Boolean            @default(false)
+  shelterCode            String?
+  hazardExposure         Json?
+  assessedAt             DateTime           @db.Timestamptz(3)
+  assessedBySubjectId    String
+  createdAt              DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([childId, organizationId])
+  @@index([organizationId, administrativeAreaCode, vulnerability])
+  @@index([organizationId, displaced, updatedAt])
+  @@map("climate_profiles")
+}
+
+model ClimateEvent {
+  id                 String             @id @default(cuid())
+  organizationId     String
+  name               String
+  eventType          String
+  status             ClimateEventStatus @default(DRAFT)
+  severity           VulnerabilityLevel
+  source             String
+  externalReference  String?
+  startsAt           DateTime           @db.Timestamptz(3)
+  endsAt             DateTime?          @db.Timestamptz(3)
+  createdBySubjectId String
+  activatedAt        DateTime?          @db.Timestamptz(3)
+  closedAt           DateTime?          @db.Timestamptz(3)
+  createdAt          DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization  Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  affectedAreas AffectedArea[]
+  worklists     BeneficiaryWorklist[]
+  assistanceRequests ClimateAssistanceRequest[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, source, externalReference])
+  @@index([organizationId, status, startsAt])
+  @@map("climate_events")
+}
+
+model AffectedArea {
+  id                     String             @id @default(cuid())
+  organizationId         String
+  climateEventId         String
+  administrativeAreaCode String
+  administrativeAreaName String
+  severity               VulnerabilityLevel
+  affectedFrom           DateTime           @db.Timestamptz(3)
+  affectedUntil          DateTime?          @db.Timestamptz(3)
+  sourceEvidence         Json?
+  createdBySubjectId     String
+  createdAt              DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  climateEvent ClimateEvent @relation(fields: [climateEventId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([climateEventId, administrativeAreaCode])
+  @@index([organizationId, administrativeAreaCode, affectedFrom])
+  @@map("affected_areas")
+}
+
+model BeneficiaryWorklist {
+  id                    String         @id @default(cuid())
+  organizationId        String
+  climateEventId        String
+  programmeId           String
+  name                  String
+  status                WorklistStatus @default(DRAFT)
+  authorizationBasis    String
+  criteria              Json
+  generationComplete    Boolean        @default(false)
+  generationCursor      String?
+  generatedCount        Int            @default(0)
+  generatedAt           DateTime?      @db.Timestamptz(3)
+  createdBySubjectId    String
+  authorizedBySubjectId String?
+  authorizedAt          DateTime?      @db.Timestamptz(3)
+  closedBySubjectId     String?
+  closedAt              DateTime?      @db.Timestamptz(3)
+  createdAt             DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime       @updatedAt @db.Timestamptz(3)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  climateEvent ClimateEvent    @relation(fields: [climateEventId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  programme    Programme       @relation(fields: [programmeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  entries      WorklistEntry[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, climateEventId, status])
+  @@index([organizationId, programmeId, status])
+  @@map("beneficiary_worklists")
+}
+
+model WorklistEntry {
+  id                String              @id @default(cuid())
+  organizationId    String
+  worklistId        String
+  childId           String
+  eligibility       EligibilityStatus
+  eligibilityReason String
+  priority          VulnerabilityLevel
+  status            WorklistEntryStatus @default(PENDING)
+  assignedSubjectId String?
+  contactedAt       DateTime?           @db.Timestamptz(3)
+  completedAt       DateTime?           @db.Timestamptz(3)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  worklist     BeneficiaryWorklist @relation(fields: [worklistId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  child        Child               @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  deliveries   ServiceDelivery[]
+  referrals    Referral[]
+
+  @@unique([id, organizationId])
+  @@unique([worklistId, childId])
+  @@index([organizationId, worklistId, status, priority])
+  @@index([organizationId, childId, createdAt])
+  @@map("worklist_entries")
+}
+
+model ServiceDelivery {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  worklistEntryId      String
+  childId              String
+  category             String
+  quantity             Int
+  unit                 String
+  deliveredAt          DateTime @db.Timestamptz(3)
+  deliveredBySubjectId String
+  notes                String?
+  sourceOperationId    String
+  createdAt            DateTime @default(now()) @db.Timestamptz(3)
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  worklistEntry WorklistEntry @relation(fields: [worklistEntryId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child         Child         @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  confirmations ServiceDeliveryConfirmation[]
+
+  @@unique([organizationId, sourceOperationId])
+  @@unique([id, organizationId])
+  @@index([organizationId, childId, deliveredAt])
+  @@index([organizationId, category, deliveredAt])
+  @@map("service_deliveries")
+}
+
+model Referral {
+  id                String             @id @default(cuid())
+  organizationId    String
+  worklistEntryId   String
+  childId           String
+  referralType      String
+  destination       String
+  priority          VulnerabilityLevel
+  status            ReferralStatus     @default(OPEN)
+  reason            String
+  openedBySubjectId String
+  openedAt          DateTime           @default(now()) @db.Timestamptz(3)
+  closedBySubjectId String?
+  closedAt          DateTime?          @db.Timestamptz(3)
+  closureNotes      String?
+  sourceOperationId String
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  worklistEntry WorklistEntry @relation(fields: [worklistEntryId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child         Child         @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, sourceOperationId])
+  @@index([organizationId, childId, status])
+  @@index([organizationId, destination, status])
+  @@map("referrals")
+}
+
+model FieldDevice {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  subjectId            String
+  deviceIdentifierHash String
+  displayName          String
+  platform             String
+  appVersion           String
+  publicKey            String?
+  nfcProvisioningEnabled Boolean      @default(false)
+  nfcProvisioningApprovedAt DateTime? @db.Timestamptz(3)
+  nfcProvisioningApprovedBySubjectId String?
+  status               DeviceStatus @default(ACTIVE)
+  registeredAt         DateTime     @default(now()) @db.Timestamptz(3)
+  lastSeenAt           DateTime?    @db.Timestamptz(3)
+  revokedAt            DateTime?    @db.Timestamptz(3)
+  revokedBySubjectId   String?
+  revocationReason     String?
+  createdAt            DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime     @updatedAt @db.Timestamptz(3)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  syncBatches    SyncBatch[]
+  syncOperations SyncOperation[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, deviceIdentifierHash])
+  @@index([organizationId, subjectId, status])
+  @@map("field_devices")
+}
+
+model SyncBatch {
+  id             String          @id @default(cuid())
+  organizationId String
+  deviceId       String
+  clientBatchId  String
+  status         SyncBatchStatus @default(PENDING)
+  operationCount Int
+  acceptedAt     DateTime        @default(now()) @db.Timestamptz(3)
+  processingAt   DateTime?       @db.Timestamptz(3)
+  completedAt    DateTime?       @db.Timestamptz(3)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  device       FieldDevice     @relation(fields: [deviceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  operations   SyncOperation[]
+
+  @@unique([id, organizationId])
+  @@unique([deviceId, clientBatchId])
+  @@index([organizationId, status, acceptedAt])
+  @@map("sync_batches")
+}
+
+model SyncOperation {
+  id                String              @id @default(cuid())
+  organizationId    String
+  deviceId          String
+  syncBatchId       String
+  clientOperationId String
+  operationType     String
+  entityId          String?
+  baseVersion       Int?
+  payload           Json
+  status            SyncOperationStatus @default(PENDING)
+  result            Json?
+  errorCode         String?
+  errorMessage      String?
+  processedAt       DateTime?           @db.Timestamptz(3)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  device       FieldDevice  @relation(fields: [deviceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  syncBatch    SyncBatch    @relation(fields: [syncBatchId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([deviceId, clientOperationId])
+  @@index([organizationId, syncBatchId, status])
+  @@index([organizationId, status, createdAt])
+  @@map("sync_operations")
+}
+
+model OutboxEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  eventType      String
+  aggregateType  String
+  aggregateId    String
+  idempotencyKey String
+  payload        Json
+  status         OutboxStatus @default(PENDING)
+  attempts       Int          @default(0)
+  nextAttemptAt  DateTime     @default(now()) @db.Timestamptz(3)
+  lockedAt       DateTime?    @db.Timestamptz(3)
+  lockedBy       String?
+  publishedAt    DateTime?    @db.Timestamptz(3)
+  lastError      String?
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, aggregateType, aggregateId])
+  @@map("outbox_events")
+}
+
+model RewardCampaign {
+  id                   String               @id @default(cuid())
+  organizationId       String
+  programmeId          String?
+  name                 String
+  sponsorName          String
+  status               RewardCampaignStatus @default(DRAFT)
+  startsAt             DateTime             @db.Timestamptz(3)
+  endsAt               DateTime             @db.Timestamptz(3)
+  creditBudget         BigInt
+  creditsIssued        BigInt               @default(0)
+  milestoneRules       Json
+  createdBySubjectId   String
+  activatedBySubjectId String?
+  activatedAt          DateTime?            @db.Timestamptz(3)
+  closedAt             DateTime?            @db.Timestamptz(3)
+  createdAt            DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  programme    Programme?          @relation(fields: [programmeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  grants       RewardGrant[]
+  transactions RewardTransaction[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, startsAt, endsAt])
+  @@index([organizationId, programmeId, status])
+  @@map("reward_campaigns")
+}
+
+model RewardAccount {
+  id              String              @id @default(cuid())
+  organizationId  String
+  caregiverId     String
+  status          RewardAccountStatus @default(ACTIVE)
+  balance         BigInt              @default(0)
+  reservedBalance BigInt              @default(0)
+  version         Int                 @default(0)
+  createdAt       DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver           @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  transactions RewardTransaction[]
+  grants       RewardGrant[]
+  reservations RewardReservation[]
+
+  @@unique([id, organizationId])
+  @@unique([caregiverId, organizationId])
+  @@index([organizationId, status, updatedAt])
+  @@map("reward_accounts")
+}
+
+model RewardTransaction {
+  id                      String                @id @default(cuid())
+  organizationId          String
+  rewardAccountId         String
+  rewardCampaignId        String?
+  merchantId              String?
+  type                    RewardTransactionType
+  amount                  BigInt
+  balanceAfter            BigInt
+  reservedBalanceAfter    BigInt
+  idempotencyKey          String
+  referenceType           String
+  referenceId             String
+  reversalOfTransactionId String?
+  metadata                Json?
+  createdBySubjectId      String
+  createdAt               DateTime              @default(now()) @db.Timestamptz(3)
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  rewardAccount  RewardAccount       @relation(fields: [rewardAccountId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  rewardCampaign RewardCampaign?     @relation(fields: [rewardCampaignId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  merchant       Merchant?           @relation(fields: [merchantId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  reversalOf     RewardTransaction?  @relation("RewardTransactionReversal", fields: [reversalOfTransactionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  reversals      RewardTransaction[] @relation("RewardTransactionReversal")
+  redemption     RewardRedemption?
+  grant          RewardGrant?
+  entries        RewardLedgerEntry[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, idempotencyKey])
+  @@unique([reversalOfTransactionId, organizationId])
+  @@index([organizationId, rewardAccountId, createdAt])
+  @@index([organizationId, referenceType, referenceId])
+  @@map("reward_transactions")
+}
+
+model RewardLedgerEntry {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  rewardTransactionId String
+  accountCode         String
+  debit               BigInt   @default(0)
+  credit              BigInt   @default(0)
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  rewardTransaction RewardTransaction @relation(fields: [rewardTransactionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, rewardTransactionId])
+  @@index([organizationId, accountCode, createdAt])
+  @@map("reward_ledger_entries")
+}
+
+model RewardGrant {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  rewardCampaignId   String
+  rewardAccountId    String
+  childId            String
+  milestoneCode      String
+  credits            BigInt
+  sourceRecordType   String
+  sourceRecordId     String
+  transactionId      String   @unique
+  grantedBySubjectId String
+  grantedAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  rewardCampaign RewardCampaign    @relation(fields: [rewardCampaignId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  rewardAccount  RewardAccount     @relation(fields: [rewardAccountId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child          Child             @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  transaction    RewardTransaction @relation(fields: [transactionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([rewardCampaignId, childId, milestoneCode])
+  @@unique([transactionId, organizationId])
+  @@index([organizationId, childId, grantedAt])
+  @@map("reward_grants")
+}
+
+model Merchant {
+  id                   String         @id @default(cuid())
+  organizationId       String
+  name                 String
+  code                 String
+  status               MerchantStatus @default(PENDING)
+  eligibleCategories   Json
+  settlementAccountRef String?
+  approvedBySubjectId  String?
+  approvedAt           DateTime?      @db.Timestamptz(3)
+  suspendedAt          DateTime?      @db.Timestamptz(3)
+  suspensionReason     String?
+  createdBySubjectId   String
+  createdAt            DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @db.Timestamptz(3)
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  transactions RewardTransaction[]
+  reservations RewardReservation[]
+  redemptions  RewardRedemption[]
+  settlements  SettlementBatch[]
+  memberships  MerchantMembership[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, code])
+  @@index([organizationId, status, name])
+  @@map("merchants")
+}
+
+model RewardReservation {
+  id                 String                  @id @default(cuid())
+  organizationId     String
+  rewardAccountId    String
+  merchantId         String
+  category           String
+  amount             BigInt
+  tokenHash          String                  @unique
+  status             RewardReservationStatus @default(ACTIVE)
+  expiresAt          DateTime                @db.Timestamptz(3)
+  consumedAt         DateTime?               @db.Timestamptz(3)
+  releasedAt         DateTime?               @db.Timestamptz(3)
+  createdBySubjectId String
+  createdAt          DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                @updatedAt @db.Timestamptz(3)
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  rewardAccount RewardAccount     @relation(fields: [rewardAccountId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  merchant      Merchant          @relation(fields: [merchantId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  redemption    RewardRedemption?
+  ussdConfirmation RewardRedemptionConfirmation?
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, expiresAt])
+  @@index([organizationId, rewardAccountId, status])
+  @@map("reward_reservations")
+}
+
+model RewardRedemption {
+  id                  String                 @id @default(cuid())
+  organizationId      String
+  rewardReservationId String                 @unique
+  rewardTransactionId String                 @unique
+  merchantId          String
+  settlementBatchId   String?
+  amount              BigInt
+  status              RewardRedemptionStatus @default(COMPLETED)
+  merchantReference   String
+  redeemedBySubjectId String
+  redeemedAt          DateTime               @default(now()) @db.Timestamptz(3)
+  reversedAt          DateTime?              @db.Timestamptz(3)
+  reversedBySubjectId String?
+  reversalReason      String?
+  createdAt           DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime               @updatedAt @db.Timestamptz(3)
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  rewardReservation RewardReservation @relation(fields: [rewardReservationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  rewardTransaction RewardTransaction @relation(fields: [rewardTransactionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  merchant          Merchant          @relation(fields: [merchantId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  settlementBatch   SettlementBatch?  @relation(fields: [settlementBatchId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([rewardReservationId, organizationId])
+  @@unique([rewardTransactionId, organizationId])
+  @@unique([merchantId, merchantReference])
+  @@index([organizationId, merchantId, redeemedAt])
+  @@index([organizationId, status, redeemedAt])
+  @@index([organizationId, merchantId, settlementBatchId, redeemedAt])
+  @@map("reward_redemptions")
+}
+
+model SettlementBatch {
+  id                  String           @id @default(cuid())
+  organizationId      String
+  merchantId          String
+  periodStart         DateTime         @db.Timestamptz(3)
+  periodEnd           DateTime         @db.Timestamptz(3)
+  totalCredits        BigInt
+  redemptionCount     Int
+  status              SettlementStatus @default(DRAFT)
+  createdBySubjectId  String
+  approvedBySubjectId String?
+  approvedAt          DateTime?        @db.Timestamptz(3)
+  paidAt              DateTime?        @db.Timestamptz(3)
+  paymentReference    String?
+  failedAt            DateTime?        @db.Timestamptz(3)
+  failureReason       String?
+  createdAt           DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime         @updatedAt @db.Timestamptz(3)
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  merchant     Merchant           @relation(fields: [merchantId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  redemptions  RewardRedemption[]
+
+  @@unique([id, organizationId])
+  @@unique([merchantId, periodStart, periodEnd])
+  @@index([organizationId, status, createdAt])
+  @@map("settlement_batches")
+}
+
+model MerchantMembership {
+  id                 String                 @id @default(cuid())
+  organizationId     String
+  merchantId         String
+  subjectId          String
+  role               MerchantMembershipRole
+  status             MembershipStatus       @default(ACTIVE)
+  createdBySubjectId String
+  createdAt          DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime               @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  merchant     Merchant     @relation(fields: [merchantId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([merchantId, subjectId])
+  @@index([organizationId, subjectId, status])
+  @@map("merchant_memberships")
+}
+
+model NotificationPreference {
+  id              String              @id @default(cuid())
+  organizationId  String
+  subjectId       String
+  category        String
+  channel         NotificationChannel
+  enabled         Boolean             @default(true)
+  locale          String              @default("en")
+  timezone        String              @default("Africa/Lagos")
+  quietHoursStart Int?
+  quietHoursEnd   Int?
+  createdAt       DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, subjectId, category, channel])
+  @@index([organizationId, subjectId, enabled])
+  @@map("notification_preferences")
+}
+
+model NotificationTemplate {
+  id                   String                     @id @default(cuid())
+  organizationId       String
+  key                  String
+  version              Int
+  locale               String
+  channel              NotificationChannel
+  status               NotificationTemplateStatus @default(DRAFT)
+  subject              String?
+  body                 String
+  variableNames        Json
+  createdBySubjectId   String
+  activatedBySubjectId String?
+  activatedAt          DateTime?                  @db.Timestamptz(3)
+  retiredAt            DateTime?                  @db.Timestamptz(3)
+  createdAt            DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                   @updatedAt @db.Timestamptz(3)
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  messages     NotificationMessage[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, key, version, locale, channel])
+  @@index([organizationId, key, locale, channel, status])
+  @@map("notification_templates")
+}
+
+model NotificationMessage {
+  id                   String                    @id @default(cuid())
+  organizationId       String
+  recipientSubjectId   String
+  recipientCaregiverId String?
+  templateId           String
+  category             String
+  channel              NotificationChannel
+  locale               String
+  variables            Json
+  renderedSubject      String?
+  renderedBody         String
+  status               NotificationMessageStatus @default(QUEUED)
+  idempotencyKey       String
+  scheduledAt          DateTime                  @default(now()) @db.Timestamptz(3)
+  sentAt               DateTime?                 @db.Timestamptz(3)
+  deliveredAt          DateTime?                 @db.Timestamptz(3)
+  failedAt             DateTime?                 @db.Timestamptz(3)
+  readAt               DateTime?                 @db.Timestamptz(3)
+  suppressedReason     String?
+  createdAt            DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                  @updatedAt @db.Timestamptz(3)
+
+  organization Organization                  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver?                    @relation(fields: [recipientCaregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  template     NotificationTemplate          @relation(fields: [templateId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  attempts     NotificationDeliveryAttempt[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, recipientSubjectId, status, createdAt])
+  @@index([organizationId, status, scheduledAt])
+  @@map("notification_messages")
+}
+
+model NotificationDeliveryAttempt {
+  id                    String                    @id @default(cuid())
+  organizationId        String
+  notificationMessageId String
+  attemptNumber         Int
+  provider              String
+  status                NotificationAttemptStatus
+  providerMessageId     String?
+  responseCode          String?
+  failureCode           String?
+  startedAt             DateTime                  @default(now()) @db.Timestamptz(3)
+  completedAt           DateTime?                 @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  message      NotificationMessage @relation(fields: [notificationMessageId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([notificationMessageId, attemptNumber])
+  @@index([organizationId, status, startedAt])
+  @@index([organizationId, provider, providerMessageId])
+  @@map("notification_delivery_attempts")
+}
+
+model IntegrationConnection {
+  id                    String                      @id @default(cuid())
+  organizationId        String
+  name                  String
+  partnerIdentifier     String
+  type                  IntegrationType
+  status                IntegrationConnectionStatus @default(DRAFT)
+  baseUrl               String
+  authType              IntegrationAuthType
+  credentialSecretName  String
+  fhirVersion           String?
+  dhis2ApiVersion       String?
+  allowedDataCategories Json
+  timeoutMs             Int                         @default(10000)
+  lastHealthStatus      IntegrationHealthStatus?
+  lastHealthCheckedAt   DateTime?                   @db.Timestamptz(3)
+  lastHealthErrorCode   String?
+  createdBySubjectId    String
+  activatedBySubjectId  String?
+  activatedAt           DateTime?                   @db.Timestamptz(3)
+  suspendedAt           DateTime?                   @db.Timestamptz(3)
+  createdAt             DateTime                    @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime                    @updatedAt @db.Timestamptz(3)
+
+  organization    Organization                   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  mappings        IntegrationMapping[]
+  jobs            IntegrationJob[]
+  reconciliations IntegrationReconciliationRun[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, partnerIdentifier])
+  @@index([organizationId, type, status])
+  @@map("integration_connections")
+}
+
+model IntegrationMapping {
+  id                   String                   @id @default(cuid())
+  organizationId       String
+  connectionId         String
+  resourceType         String
+  direction            IntegrationDirection
+  version              Int
+  status               IntegrationMappingStatus @default(DRAFT)
+  mappingDefinition    Json
+  createdBySubjectId   String
+  activatedBySubjectId String?
+  activatedAt          DateTime?                @db.Timestamptz(3)
+  retiredAt            DateTime?                @db.Timestamptz(3)
+  createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  connection   IntegrationConnection @relation(fields: [connectionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  jobs         IntegrationJob[]
+
+  @@unique([id, organizationId])
+  @@unique([connectionId, resourceType, direction, version])
+  @@index([organizationId, connectionId, resourceType, direction, status])
+  @@map("integration_mappings")
+}
+
+model IntegrationJob {
+  id                   String               @id @default(cuid())
+  organizationId       String
+  connectionId         String
+  mappingId            String
+  direction            IntegrationDirection
+  resourceType         String
+  status               IntegrationJobStatus @default(QUEUED)
+  criteria             Json
+  cursor               String?
+  recordsDiscovered    Int                  @default(0)
+  recordsSucceeded     Int                  @default(0)
+  recordsFailed        Int                  @default(0)
+  idempotencyKey       String
+  requestedBySubjectId String
+  startedAt            DateTime?            @db.Timestamptz(3)
+  completedAt          DateTime?            @db.Timestamptz(3)
+  failedAt             DateTime?            @db.Timestamptz(3)
+  lastErrorCode        String?
+  lockedAt             DateTime?            @db.Timestamptz(3)
+  lockedBy             String?
+  createdAt            DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @db.Timestamptz(3)
+
+  organization    Organization                   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  connection      IntegrationConnection          @relation(fields: [connectionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  mapping         IntegrationMapping             @relation(fields: [mappingId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  records         IntegrationExchangeRecord[]
+  reconciliations IntegrationReconciliationRun[]
+  importStaging   IntegrationImportStaging[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, connectionId, direction, resourceType])
+  @@map("integration_jobs")
+}
+
+model IntegrationExchangeRecord {
+  id                 String                  @id @default(cuid())
+  organizationId     String
+  jobId              String
+  recordKey          String
+  localResourceType  String
+  localResourceId    String?
+  externalResourceId String?
+  externalVersion    String?
+  payloadHash        String
+  status             IntegrationRecordStatus
+  errorCode          String?
+  processedAt        DateTime                @default(now()) @db.Timestamptz(3)
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  job          IntegrationJob @relation(fields: [jobId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([jobId, recordKey])
+  @@index([organizationId, jobId, status])
+  @@index([organizationId, localResourceType, localResourceId])
+  @@map("integration_exchange_records")
+}
+
+model IntegrationReconciliationRun {
+  id                   String                          @id @default(cuid())
+  organizationId       String
+  connectionId         String
+  jobId                String?
+  status               IntegrationReconciliationStatus @default(RUNNING)
+  localCount           Int                             @default(0)
+  externalCount        Int                             @default(0)
+  matchedCount         Int                             @default(0)
+  missingLocalCount    Int                             @default(0)
+  missingExternalCount Int                             @default(0)
+  mismatchCount        Int                             @default(0)
+  startedBySubjectId   String
+  startedAt            DateTime                        @default(now()) @db.Timestamptz(3)
+  completedAt          DateTime?                       @db.Timestamptz(3)
+  failedAt             DateTime?                       @db.Timestamptz(3)
+  errorCode            String?
+  cursor               String?
+  lockedAt             DateTime?                       @db.Timestamptz(3)
+  lockedBy             String?
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  connection   IntegrationConnection @relation(fields: [connectionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  job          IntegrationJob?       @relation(fields: [jobId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, connectionId, status, startedAt])
+  @@map("integration_reconciliation_runs")
+}
+
+model AnalyticsPublicationPolicy {
+  id                     String                  @id @default(cuid())
+  organizationId         String                  @unique
+  isPublicEnabled        Boolean                 @default(false)
+  minimumCellSize        Int                     @default(10)
+  maximumGeography       AnalyticsGeographyLevel @default(STATE)
+  publicOrganizationName String?
+  approvedBySubjectId    String?
+  approvedAt             DateTime?               @db.Timestamptz(3)
+  createdAt              DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime                @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("analytics_publication_policies")
+}
+
+model AnalyticsGenerationRun {
+  id                   String                    @id @default(cuid())
+  organizationId       String
+  status               AnalyticsGenerationStatus @default(QUEUED)
+  periodStart          DateTime                  @db.Timestamptz(3)
+  periodEnd            DateTime                  @db.Timestamptz(3)
+  requestedBySubjectId String
+  startedAt            DateTime?                 @db.Timestamptz(3)
+  completedAt          DateTime?                 @db.Timestamptz(3)
+  metricCount          Int                       @default(0)
+  lastErrorCode        String?
+  idempotencyKey       String
+  createdAt            DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                  @updatedAt @db.Timestamptz(3)
+
+  organization Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  snapshots    AggregateMetricSnapshot[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([id, organizationId])
+  @@index([organizationId, status, createdAt])
+  @@map("analytics_generation_runs")
+}
+
+model AggregateMetricSnapshot {
+  id                String                    @id @default(cuid())
+  organizationId    String
+  generationRunId   String
+  metricKey         String
+  periodStart       DateTime                  @db.Timestamptz(3)
+  periodEnd         DateTime                  @db.Timestamptz(3)
+  dimensionType     AnalyticsDimensionType    @default(ORGANIZATION)
+  dimensionValue    String
+  numerator         Int
+  denominator       Int?
+  valueBasisPoints  Int?
+  unit              AnalyticsMetricUnit
+  cohortSize        Int
+  disclosureStatus  AnalyticsDisclosureStatus @default(INTERNAL)
+  suppressionReason String?
+  dataThrough       DateTime                  @db.Timestamptz(3)
+  generatedAt       DateTime                  @default(now()) @db.Timestamptz(3)
+
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  generationRun AnalyticsGenerationRun @relation(fields: [generationRunId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([generationRunId, metricKey, dimensionType, dimensionValue])
+  @@index([organizationId, disclosureStatus, periodEnd, metricKey])
+  @@index([organizationId, dimensionType, dimensionValue, periodEnd])
+  @@map("aggregate_metric_snapshots")
+}
+
+model DataRetentionPolicy {
+  id                  String                  @id @default(cuid())
+  organizationId      String
+  recordCategory      RetentionRecordCategory
+  retentionDays       Int
+  disposition         RetentionDisposition
+  legalBasis          String
+  version             Int
+  status              GovernancePolicyStatus  @default(DRAFT)
+  approvedBySubjectId String?
+  approvedAt          DateTime?               @db.Timestamptz(3)
+  effectiveAt         DateTime?               @db.Timestamptz(3)
+  createdBySubjectId  String
+  createdAt           DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @db.Timestamptz(3)
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  runs         RetentionExecutionRun[]
+
+  @@unique([organizationId, recordCategory, version])
+  @@unique([id, organizationId])
+  @@index([organizationId, recordCategory, status])
+  @@map("data_retention_policies")
+}
+
+model RetentionExecutionRun {
+  id                   String                   @id @default(cuid())
+  organizationId       String
+  policyId             String
+  status               RetentionExecutionStatus @default(PREVIEWED)
+  cutoffAt             DateTime                 @db.Timestamptz(3)
+  candidateCount       Int
+  excludedByHoldCount  Int                      @default(0)
+  affectedCount        Int                      @default(0)
+  previewedBySubjectId String
+  approvedBySubjectId  String?
+  approvedAt           DateTime?                @db.Timestamptz(3)
+  executedBySubjectId  String?
+  executedAt           DateTime?                @db.Timestamptz(3)
+  failureCode          String?
+  idempotencyKey       String
+  createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  policy       DataRetentionPolicy @relation(fields: [policyId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([id, organizationId])
+  @@index([organizationId, status, createdAt])
+  @@map("retention_execution_runs")
+}
+
+model LegalHold {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  childId             String?
+  targetType          LegalHoldTargetType
+  targetReference     String
+  reason              String
+  legalAuthority      String
+  status              LegalHoldStatus     @default(ACTIVE)
+  placedBySubjectId   String
+  placedAt            DateTime            @default(now()) @db.Timestamptz(3)
+  releasedBySubjectId String?
+  releasedAt          DateTime?           @db.Timestamptz(3)
+  releaseReason       String?
+  createdAt           DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  child        Child?       @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, targetType, targetReference])
+  @@index([organizationId, childId, status])
+  @@map("legal_holds")
+}
+
+model DataSubjectRequest {
+  id                          String                   @id @default(cuid())
+  organizationId              String
+  caregiverId                 String?
+  childId                     String?
+  requestType                 DataSubjectRequestType
+  status                      DataSubjectRequestStatus @default(RECEIVED)
+  requestDetails              String
+  submittedBySubjectId        String
+  submittedAt                 DateTime                 @default(now()) @db.Timestamptz(3)
+  identityVerifiedBySubjectId String?
+  identityVerifiedAt          DateTime?                @db.Timestamptz(3)
+  assignedToSubjectId         String?
+  dueAt                       DateTime                 @db.Timestamptz(3)
+  decision                    String?
+  decisionReason              String?
+  decidedBySubjectId          String?
+  decidedAt                   DateTime?                @db.Timestamptz(3)
+  completedAt                 DateTime?                @db.Timestamptz(3)
+  createdAt                   DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt                   DateTime                 @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver?   @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child?       @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, dueAt])
+  @@index([organizationId, caregiverId, submittedAt])
+  @@index([organizationId, childId, submittedAt])
+  @@map("data_subject_requests")
+}
+
+model LocalizationContent {
+  id                  String                    @id @default(cuid())
+  organizationId      String
+  contentKey          String
+  locale              String
+  value               String
+  translatorNote      String?
+  version             Int
+  status              LocalizationContentStatus @default(DRAFT)
+  createdBySubjectId  String
+  approvedBySubjectId String?
+  approvedAt          DateTime?                 @db.Timestamptz(3)
+  createdAt           DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                  @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, contentKey, locale, version])
+  @@unique([id, organizationId])
+  @@index([organizationId, locale, status, contentKey])
+  @@map("localization_content")
+}
+
+model IntegrationImportStaging {
+  id                   String                        @id @default(cuid())
+  organizationId       String
+  jobId                String
+  recordKey            String
+  externalResourceType String
+  externalResourceId   String?
+  payloadHash          String
+  payloadCiphertext    String
+  payloadIv            String
+  payloadAuthTag       String
+  status               IntegrationImportReviewStatus @default(PENDING)
+  reviewedBySubjectId  String?
+  reviewedAt           DateTime?                     @db.Timestamptz(3)
+  reviewReason         String?
+  appliedResourceType  String?
+  appliedResourceId    String?
+  createdAt            DateTime                      @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                      @updatedAt @db.Timestamptz(3)
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  job          IntegrationJob @relation(fields: [jobId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([jobId, recordKey])
+  @@index([organizationId, status, createdAt])
+  @@map("integration_import_staging")
+}
+
+model UssdSession {
+  id                 String            @id @default(cuid())
+  provider           String
+  providerSessionId  String
+  organizationId     String?
+  caregiverId        String?
+  phoneDigest        String
+  phoneLastFour      String
+  locale             String            @default("en")
+  status             UssdSessionStatus @default(ACTIVE)
+  assurance          UssdAssurance     @default(NONE)
+  currentMenu        String            @default("ROOT")
+  state              Json              @default("{}")
+  lastRequestDigest  String?
+  lastResponse       String?
+  pinVerifiedAt      DateTime?          @db.Timestamptz(3)
+  otpVerifiedAt      DateTime?          @db.Timestamptz(3)
+  expiresAt          DateTime           @db.Timestamptz(3)
+  completedAt        DateTime?          @db.Timestamptz(3)
+  createdAt          DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver?    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([provider, providerSessionId])
+  @@index([phoneDigest, status, expiresAt])
+  @@index([organizationId, caregiverId, status])
+  @@map("ussd_sessions")
+}
+
+model UssdPhoneRoute {
+  id             String    @id @default(cuid())
+  phoneDigest    String
+  organizationId String
+  caregiverId    String
+  disabledAt     DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([phoneDigest, organizationId, caregiverId])
+  @@index([phoneDigest, disabledAt])
+  @@map("ussd_phone_routes")
+}
+
+model UssdFacilityDirectory {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  facilityId          String   @unique
+  organizationName    String
+  facilityName        String
+  administrativeArea  String
+  address              String?
+  phone                String?
+  openingHours         Json?
+  programmeCategories  Json?
+  latitude             Decimal? @db.Decimal(9, 6)
+  longitude            Decimal? @db.Decimal(9, 6)
+  isTemporary          Boolean  @default(false)
+  temporaryUntil       DateTime? @db.Timestamptz(3)
+  publishedAt          DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  facility     Facility     @relation(fields: [facilityId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([facilityId, organizationId])
+  @@index([administrativeArea, isTemporary, temporaryUntil])
+  @@map("ussd_facility_directory")
+}
+
+model UssdOtpChallenge {
+  id                 String          @id @default(cuid())
+  organizationId     String
+  caregiverId        String
+  purpose            UssdOtpPurpose
+  codeHash           String
+  actionDigest       String
+  sourceSessionId    String?         @unique
+  attempts           Int             @default(0)
+  maxAttempts        Int             @default(5)
+  status             UssdOtpStatus   @default(PENDING)
+  expiresAt          DateTime        @db.Timestamptz(3)
+  consumedAt         DateTime?       @db.Timestamptz(3)
+  createdAt          DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime        @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, caregiverId, purpose, status, expiresAt])
+  @@map("ussd_otp_challenges")
+}
+
+model AppointmentCaregiverResponse {
+  id                 String                      @id @default(cuid())
+  organizationId     String
+  appointmentId      String
+  childId            String
+  caregiverId        String
+  response           AppointmentCaregiverDecision
+  preferredStart     DateTime?                   @db.Timestamptz(3)
+  preferredEnd       DateTime?                   @db.Timestamptz(3)
+  status             UssdRequestStatus           @default(PENDING)
+  sourceSessionId    String                      @unique
+  reviewedBySubjectId String?
+  reviewedAt         DateTime?                   @db.Timestamptz(3)
+  reviewNotes        String?
+  createdAt          DateTime                    @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                    @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  appointment  Appointment  @relation(fields: [appointmentId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  caregiver    Caregiver    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, appointmentId, status, createdAt])
+  @@map("appointment_caregiver_responses")
+}
+
+model UssdCallbackRequest {
+  id                 String               @id @default(cuid())
+  organizationId     String
+  caregiverId        String
+  childId            String?
+  category           UssdCallbackCategory
+  priority           VulnerabilityLevel   @default(LOW)
+  status             UssdRequestStatus    @default(PENDING)
+  sourceSessionId    String               @unique
+  assignedSubjectId  String?
+  resolvedBySubjectId String?
+  resolvedAt         DateTime?            @db.Timestamptz(3)
+  resolutionNotes    String?
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime             @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child?       @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, category, status, priority, createdAt])
+  @@map("ussd_callback_requests")
+}
+
+model NfcCardSupportRequest {
+  id                 String              @id @default(cuid())
+  organizationId     String
+  caregiverId        String
+  childId            String
+  credentialId       String
+  requestType        NfcCardSupportType
+  status             UssdRequestStatus   @default(PENDING)
+  sourceSessionId    String              @unique
+  temporarySuspendedAt DateTime?          @db.Timestamptz(3)
+  identityVerifiedAt DateTime?            @db.Timestamptz(3)
+  reviewedBySubjectId String?
+  reviewedAt         DateTime?            @db.Timestamptz(3)
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime             @updatedAt @db.Timestamptz(3)
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver     @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child         @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  credential   ChildCredential @relation(fields: [credentialId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, credentialId, status, createdAt])
+  @@map("nfc_card_support_requests")
+}
+
+model UssdConsentRequest {
+  id                   String               @id @default(cuid())
+  organizationId       String
+  caregiverId          String
+  childId              String
+  recipientType        ConsentRecipientType
+  recipientId          String
+  recipientDisplayName String
+  purpose              String
+  legalBasis           String
+  policyVersion        String
+  requestedScopes      Json
+  status               UssdConsentRequestStatus @default(PENDING)
+  expiresAt            DateTime             @db.Timestamptz(3)
+  decidedAt            DateTime?            @db.Timestamptz(3)
+  sourceSessionId      String?               @unique
+  consentGrantId       String?               @unique
+  createdBySubjectId   String
+  createdAt            DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime              @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child        @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  consentGrant ConsentGrant? @relation(fields: [consentGrantId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([consentGrantId, organizationId])
+  @@index([organizationId, caregiverId, status, expiresAt])
+  @@map("ussd_consent_requests")
+}
+
+model ProgrammeInterest {
+  id                 String                    @id @default(cuid())
+  organizationId     String
+  caregiverId        String
+  childId            String?
+  programmeId        String?
+  category           ProgrammeInterestCategory
+  administrativeArea String?
+  status             UssdRequestStatus         @default(PENDING)
+  sourceSessionId    String                    @unique
+  reviewedBySubjectId String?
+  reviewedAt         DateTime?                  @db.Timestamptz(3)
+  createdAt          DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                   @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child?       @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  programme    Programme?   @relation(fields: [programmeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, category, status, createdAt])
+  @@map("programme_interests")
+}
+
+model ServiceDeliveryConfirmation {
+  id                 String                       @id @default(cuid())
+  organizationId     String
+  serviceDeliveryId  String
+  childId            String
+  caregiverId        String
+  decision           ServiceDeliveryDecision
+  status             UssdRequestStatus            @default(PENDING)
+  sourceSessionId    String                       @unique
+  reviewedBySubjectId String?
+  reviewedAt         DateTime?                     @db.Timestamptz(3)
+  createdAt          DateTime                      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                      @updatedAt @db.Timestamptz(3)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  delivery     ServiceDelivery @relation(fields: [serviceDeliveryId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child           @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  caregiver    Caregiver       @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([serviceDeliveryId, caregiverId])
+  @@index([organizationId, decision, status, createdAt])
+  @@map("service_delivery_confirmations")
+}
+
+model RewardRedemptionConfirmation {
+  id                  String                    @id @default(cuid())
+  organizationId      String
+  caregiverId         String
+  rewardReservationId String
+  decision            RewardConfirmationDecision
+  sourceSessionId     String                    @unique
+  confirmedAt         DateTime                  @default(now()) @db.Timestamptz(3)
+  createdAt           DateTime                  @default(now()) @db.Timestamptz(3)
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver         @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  reservation  RewardReservation @relation(fields: [rewardReservationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([rewardReservationId, organizationId])
+  @@index([organizationId, caregiverId, confirmedAt])
+  @@map("reward_redemption_confirmations")
+}
+
+model ClimateAssistanceRequest {
+  id                     String                   @id @default(cuid())
+  organizationId         String
+  caregiverId            String
+  childId                String?
+  climateEventId         String?
+  administrativeAreaCode String
+  requestType            ClimateAssistanceType
+  householdSafe          Boolean?
+  priority               VulnerabilityLevel       @default(HIGH)
+  status                 UssdRequestStatus         @default(PENDING)
+  sourceSessionId        String                    @unique
+  assignedSubjectId      String?
+  resolvedAt             DateTime?                 @db.Timestamptz(3)
+  createdAt              DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime                  @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  caregiver    Caregiver    @relation(fields: [caregiverId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  child        Child?       @relation(fields: [childId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  climateEvent ClimateEvent? @relation(fields: [climateEventId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, administrativeAreaCode, requestType, status, priority])
+  @@map("climate_assistance_requests")
+}
+
+model AnchorReceipt {
+  anchorId     String   @id
+  eventCode    Int
+  eventCategory String
+  tenantId     String
+  txId         String   @unique
+  blockHeight  BigInt
+  isoTimestamp  String
+  nonce        String
+  hashHex      String
+  confirmations Int
+  submittedAt  DateTime @db.Timestamptz(3)
+  confirmedAt  DateTime? @db.Timestamptz(3)
+  status       String   @default("pending")
+
+  @@index([tenantId, status])
+  @@index([submittedAt])
+  @@map("anchor_receipts")
+}
+
+model BlockchainDeadLetter {
+  id             String   @id @default(cuid())
+  originalPayload Json
+  error          String
+  retryCount     Int
+  status         String   @default("pending_review")
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  resolvedAt     DateTime? @db.Timestamptz(3)
+  resolvedBy     String?
+
+  @@index([status])
+  @@map("blockchain_dead_letters")
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  HEALTH_WORKER
+  NUTRITION_WORKER
+  EMERGENCY_COORDINATOR
+  AUDITOR
+  MERCHANT
+  CAREGIVER
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum MembershipScopeMode {
+  GLOBAL
+  SCOPED
+}
+
+enum UssdSessionStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  BLOCKED
+}
+
+enum UssdAssurance {
+  NONE
+  PHONE
+  PIN
+  OTP
+}
+
+enum UssdOtpPurpose {
+  CONSENT_DECISION
+  CARD_SUSPENSION
+  CARD_REPLACEMENT
+  REWARD_REDEMPTION
+  PIN_RESET
+}
+
+enum UssdOtpStatus {
+  PENDING
+  CONSUMED
+  EXPIRED
+  BLOCKED
+}
+
+enum UssdRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum AppointmentCaregiverDecision {
+  CONFIRMED
+  RESCHEDULE_REQUESTED
+}
+
+enum UssdCallbackCategory {
+  VACCINATION
+  NUTRITION
+  EMERGENCY
+  CARD_PROBLEM
+  GENERAL
+  REWARDS
+}
+
+enum NfcCardSupportType {
+  LOST_CARD_SUSPENSION
+  REPLACEMENT_REQUEST
+}
+
+enum UssdConsentRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum ProgrammeInterestCategory {
+  VACCINATION
+  NUTRITION
+  CLIMATE_EMERGENCY
+  COMMUNITY_OUTREACH
+}
+
+enum ServiceDeliveryDecision {
+  CONFIRMED
+  NOT_RECEIVED
+  DISPUTED
+}
+
+enum RewardConfirmationDecision {
+  CONFIRMED
+  DECLINED
+  DISPUTED
+}
+
+enum ClimateAssistanceType {
+  EVACUATION
+  HEALTH_SUPPORT
+  HOUSEHOLD_SAFETY
+  TEMPORARY_CLINIC
+  URGENT_NEED
+}
+
+enum ChildSex {
+  FEMALE
+  MALE
+  INTERSEX
+  UNKNOWN
+}
+
+enum ChildStatus {
+  ACTIVE
+  INACTIVE
+  DECEASED
+  DUPLICATE
+}
+
+enum IdentityAmendmentStatus {
+  PENDING
+  APPLIED
+  REJECTED
+}
+
+enum ChildIdentifierStatus {
+  PENDING
+  VERIFIED
+  REVOKED
+}
+
+enum CaregiverRelationship {
+  MOTHER
+  FATHER
+  GUARDIAN
+  RELATIVE
+  OTHER
+}
+
+enum CredentialKind {
+  QR
+  NFC
+  RECOVERY
+}
+
+enum CredentialStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+  EXPIRED
+  ROTATED
+}
+
+enum NfcBindingStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  FAILED
+  REVOKED
+}
+
+enum NfcChallengeStatus {
+  PENDING
+  CONSUMED
+  EXPIRED
+}
+
+enum ClinicalRecordStatus {
+  ACTIVE
+  ENTERED_IN_ERROR
+  AMENDED
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  ACTIVE
+  RESOLVED
+  ENTERED_IN_ERROR
+}
+
+enum AllergyCriticality {
+  LOW
+  HIGH
+  UNABLE_TO_ASSESS
+}
+
+enum AllergyStatus {
+  ACTIVE
+  RESOLVED
+  ENTERED_IN_ERROR
+}
+
+enum ClinicalRuleStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+enum ConsentRecipientType {
+  ORGANIZATION
+  PROGRAMME
+  PARTNER
+  RESEARCH
+}
+
+enum ConsentStatus {
+  ACTIVE
+  WITHDRAWN
+  EXPIRED
+  REVOKED
+}
+
+enum ConsentDataCategory {
+  IDENTITY
+  DEMOGRAPHICS
+  CAREGIVER
+  IMMUNIZATION
+  NUTRITION
+  CLINICAL_ALERTS
+  APPOINTMENTS
+  EMERGENCY_PROFILE
+  CLIMATE
+  SERVICE_DELIVERY
+  REWARDS
+}
+
+enum ConsentAccess {
+  READ
+  WRITE
+}
+
+enum DisclosureDecision {
+  ALLOWED
+  DENIED
+}
+
+enum EmergencyAccessStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum EmergencyReviewStatus {
+  PENDING
+  APPROVED
+  FLAGGED
+}
+
+enum VulnerabilityLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ClimateEventStatus {
+  DRAFT
+  ACTIVE
+  CLOSED
+  CANCELLED
+}
+
+enum WorklistStatus {
+  DRAFT
+  AUTHORIZED
+  ACTIVE
+  CLOSED
+  CANCELLED
+}
+
+enum EligibilityStatus {
+  ELIGIBLE
+  INELIGIBLE
+  REVIEW_REQUIRED
+}
+
+enum WorklistEntryStatus {
+  PENDING
+  CONTACTED
+  SERVED
+  REFERRED
+  UNREACHABLE
+}
+
+enum ReferralStatus {
+  OPEN
+  ACCEPTED
+  COMPLETED
+  CANCELLED
+}
+
+enum DeviceStatus {
+  ACTIVE
+  REVOKED
+  LOST
+}
+
+enum SyncBatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+enum SyncOperationStatus {
+  PENDING
+  PROCESSING
+  APPLIED
+  CONFLICT
+  REJECTED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+  DEAD_LETTER
+}
+
+enum RewardCampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  CLOSED
+  CANCELLED
+}
+
+enum RewardAccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum RewardTransactionType {
+  EARN
+  RESERVE
+  RELEASE
+  REDEEM
+  REVERSAL
+  ADJUSTMENT
+}
+
+enum MerchantStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum RewardReservationStatus {
+  ACTIVE
+  CONSUMED
+  RELEASED
+  EXPIRED
+}
+
+enum RewardRedemptionStatus {
+  COMPLETED
+  REVERSED
+}
+
+enum SettlementStatus {
+  DRAFT
+  APPROVED
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum MerchantMembershipRole {
+  OWNER
+  CASHIER
+  SETTLEMENT
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationTemplateStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum NotificationMessageStatus {
+  QUEUED
+  PROCESSING
+  SENT
+  DELIVERED
+  FAILED
+  SUPPRESSED
+}
+
+enum NotificationAttemptStatus {
+  STARTED
+  ACCEPTED
+  DELIVERED
+  FAILED
+}
+
+enum IntegrationType {
+  FHIR_R4
+  DHIS2
+}
+
+enum IntegrationConnectionStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum IntegrationAuthType {
+  BEARER
+  BASIC
+  OAUTH2_CLIENT_CREDENTIALS
+}
+
+enum IntegrationHealthStatus {
+  HEALTHY
+  DEGRADED
+  UNREACHABLE
+}
+
+enum IntegrationDirection {
+  IMPORT
+  EXPORT
+}
+
+enum IntegrationMappingStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum IntegrationJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum IntegrationRecordStatus {
+  SUCCEEDED
+  STAGED
+  FAILED
+  SKIPPED
+  CONFLICT
+}
+
+enum IntegrationImportReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  APPLIED
+  CONFLICT
+}
+
+enum IntegrationReconciliationStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum AnalyticsGeographyLevel {
+  NATIONAL
+  STATE
+  LGA
+}
+
+enum AnalyticsGenerationStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum AnalyticsDimensionType {
+  ORGANIZATION
+  PROGRAMME
+  FACILITY
+  ADMIN_AREA
+}
+
+enum AnalyticsMetricUnit {
+  COUNT
+  PERCENT
+}
+
+enum AnalyticsDisclosureStatus {
+  INTERNAL
+  PUBLISHED
+  SUPPRESSED
+}
+
+enum RetentionRecordCategory {
+  AUDIT_EVIDENCE
+  CLINICAL_RECORD
+  IDENTITY_RECORD
+  NOTIFICATION_ATTEMPT
+  INTEGRATION_STAGING
+  PUBLISHED_OUTBOX
+}
+
+enum RetentionDisposition {
+  REVIEW_ONLY
+  DELETE
+}
+
+enum GovernancePolicyStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum RetentionExecutionStatus {
+  PREVIEWED
+  APPROVED
+  EXECUTING
+  COMPLETED
+  FAILED
+}
+
+enum LegalHoldTargetType {
+  CHILD
+  CAREGIVER
+  ORGANIZATION
+}
+
+enum LegalHoldStatus {
+  ACTIVE
+  RELEASED
+}
+
+enum DataSubjectRequestType {
+  ACCESS
+  RECTIFICATION
+  ERASURE
+  RESTRICTION
+  PORTABILITY
+  OBJECTION
+}
+
+enum DataSubjectRequestStatus {
+  RECEIVED
+  IDENTITY_VERIFIED
+  IN_REVIEW
+  APPROVED
+  DENIED
+  COMPLETED
+  CANCELLED
+}
+
+enum LocalizationContentStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+// ─── Marketplace / Facility Registry ─────────────────────────────────────────
+
+model Hospital {
+  id              String   @id @default(cuid())
+  name            String
+  type            String   @default("")
+  email           String   @unique
+  phone           String
+  website         String   @default("")
+  establishedYear Int?
+  bedCount        Int      @default(0)
+  specialties     Json
+  street          String   @default("")
+  city            String   @default("")
+  state           String   @default("")
+  zipCode         String   @default("")
+  country         String   @default("Nigeria")
+  adminName       String   @default("")
+  adminEmail      String   @default("")
+  adminPhone      String   @default("")
+  adminTitle      String   @default("")
+  walletAddress   String   @unique
+  status          String   @default("pending")
+  verified        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@map("hospitals")
+}
+
+model HealthWorker {
+  id                 String   @id @default(cuid())
+  firstName          String
+  lastName           String
+  email              String   @unique
+  phone              String   @default("")
+  walletAddress      String   @unique
+  facilityName       String   @default("")
+  facilityType       String   @default("")
+  licenseNumber      String   @default("")
+  specialization     String   @default("")
+  professionalRole   String   @default("")
+  verificationStatus String   @default("pending")
+  status             String   @default("active")
+  createdAt          DateTime @default(now())
+
+  @@map("health_workers")
+}
+
+model TelemedicineDoctor {
+  id            String   @id @default(cuid())
+  name          String
+  specialty     String
+  rating        Float    @default(0)
+  experience    Int      @default(0)
+  avatar        String   @default("")
+  available     Boolean  @default(true)
+  price         Float
+  nextAvailable DateTime?
+
+  consultations TelemedicineConsultation[]
+
+  @@map("telemedicine_doctors")
+}
+
+model TelemedicineConsultation {
+  id          String              @id @default(cuid())
+  doctorId    String
+  patientId   String
+  type        String
+  scheduledAt DateTime
+  status      String              @default("scheduled")
+  price       Float
+  notes       String              @default("")
+  createdAt   DateTime            @default(now())
+
+  doctor TelemedicineDoctor @relation(fields: [doctorId], references: [id])
+
+  @@map("telemedicine_consultations")
+}
+
+model InsurancePolicy {
+  id              String   @id @default(cuid())
+  policyNumber    String   @unique
+  provider        String
+  type            String
+  status          String   @default("active")
+  startDate       String
+  endDate         String
+  premium         Float
+  frequency       String
+  coverage        Json
+  benefits        Json
+  documents       Json
+  nextPaymentDate String   @default("")
+  createdAt       DateTime @default(now())
+
+  claims   InsuranceClaim[]
+  payments InsurancePayment[]
+
+  @@map("insurance_policies")
+}
+
+model InsuranceClaim {
+  id             String   @id @default(cuid())
+  policyId       String
+  claimNumber    String   @unique
+  patientName    String
+  serviceDate    String
+  provider       String
+  service        String
+  amount         Float
+  status         String   @default("submitted")
+  submissionDate String
+  documents      Json
+  notes          String   @default("")
+  createdAt      DateTime @default(now())
+
+  policy InsurancePolicy @relation(fields: [policyId], references: [id])
+
+  @@map("insurance_claims")
+}
+
+model InsurancePayment {
+  id          String   @id @default(cuid())
+  policyId    String
+  amount      Float
+  paymentDate String
+  method      String
+  reference   String
+  status      String   @default("completed")
+
+  policy InsurancePolicy @relation(fields: [policyId], references: [id])
+
+  @@map("insurance_payments")
+}
+
+model Invoice {
+  id               String   @id
+  providerId       String
+  providerName     String
+  patientId        String
+  patientName      String
+  service          String
+  amount           Float
+  currency         String   @default("NGN")
+  issueDate        String
+  dueDate          String
+  status           String   @default("tokenized")
+  tokenId          String
+  blockchainHash   String
+  tokenizationDate String
+  fundingOptions   String
+  funderWallet     String?
+  fundedAmount     Float?
+  fundedAt         DateTime?
+  fundedBy         String?
+  organizationId   String   @default("ORG-001")
+  createdAt        DateTime @default(now())
+
+  @@map("invoices")
+}
+
+model DesignTemplate {
+  id          String   @id
+  name        String
+  thumbnail   String   @default("")
+  category    String
+  description String   @default("")
+  createdAt   DateTime @default(now())
+
+  @@map("design_templates")
+}
+
+model UserDesign {
+  id           String   @id
+  name         String
+  thumbnail    String   @default("")
+  category     String
+  userId       String
+  templateId   String
+  content      Json
+  createdAt    DateTime @default(now())
+  lastModified DateTime @default(now())
+
+  @@map("user_designs")
+}
+
+model Certificate {
+  id           String   @id
+  childId      String
+  childName    String
+  vaccinations Json
+  templateId   String
+  content      Json
+  createdAt    DateTime @default(now())
+
+  @@map("certificates")
+}
+
+model HealthPackage {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  price       Float
+  currency    String   @default("NGN")
+  category    String
+  image       String   @default("")
+  impact      String   @default("")
+  goal        Float
+  funded      Float    @default(0)
+  progress    Float    @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@map("health_packages")
+}

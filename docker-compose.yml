@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: medfinet
+      POSTGRES_USER: medfinet
+      POSTGRES_PASSWORD: local-development-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medfinet -d medfinet"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - medfinet_postgres:/var/lib/postgresql/data
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://medfinet:local-development-only@postgres:5432/medfinet
+      NODE_ENV: development
+      PORT: 3001
+      TRUST_PROXY_HOPS: 0
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["sh", "-c", "npx prisma migrate deploy && node scripts/process-outbox.js"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://medfinet:local-development-only@postgres:5432/medfinet
+      NODE_ENV: development
+      TRUST_PROXY_HOPS: 0
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ussd-ingress:
+    build: .
+    command: ["npm", "run", "ussd:ingress"]
+    env_file: .env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://medfinet:local-development-only@postgres:5432/medfinet
+      USSD_BACKEND_WEBHOOK_URL: http://api:3001/api/v1/webhooks/ussd/africas-talking
+      USSD_INGRESS_PORT: 3002
+      TRUST_PROXY_HOPS: 0
+    ports:
+      - "3002:3002"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  medfinet_postgres:

@@ -1,0 +1,1 @@
+ALTER TYPE "UssdCallbackCategory" ADD VALUE IF NOT EXISTS 'REWARDS';

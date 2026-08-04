@@ -1,0 +1,9 @@
+.git
+.github
+.env
+node_modules
+npm-debug.log*
+test
+cert.png
+certificate.png
+docs

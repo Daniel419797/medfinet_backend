@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_DB: medfinet_test
+          POSTGRES_USER: medfinet
+          POSTGRES_PASSWORD: medfinet-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U medfinet -d medfinet_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      DATABASE_URL: postgresql://medfinet:medfinet-ci-password@localhost:5432/medfinet_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx prisma migrate deploy
+      - run: npm test
+      - run: npm run build
