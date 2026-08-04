@@ -29,6 +29,8 @@ MedfiNet's mission is to ensure that every child's vaccination record, nutrition
 
 ## Architecture Overview
 
+![MedfiNet Architecture Diagram](./docs/architecture.png)
+
 ```
 Browser / Mobile App
        │
