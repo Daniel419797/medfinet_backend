@@ -65,17 +65,17 @@ Browser / Mobile App
 
 ## Features
 
-- 🔐 **Supabase JWT Authentication** — Row-level security, token refresh, device-pepper identity binding.
-- 📋 **Clinical Continuity** — Patient records, consent grants, and emergency access overrides.
-- ⚡ **USSD Gateway** — Africa's Talking integration for 2G / feature-phone health workers.
-- 📡 **NFC Provisioning** — NTAG215 station registration and tap-event processing.
-- 🌍 **FHIR R4 / DHIS2 Bridge** — Standards-compliant interoperability exports.
-- 🏆 **Rewards & Settlement** — Token minting, wallet crediting, and accounting ledger.
-- 🔔 **Notifications** — Outbox-pattern worker for reliable push/SMS delivery.
-- 📊 **Privacy-Preserving Analytics** — Aggregate-only reporting; no PII in query results.
-- 🌐 **Localization Governance** — Translation workflow with approval gating and audit trail.
-- ⚖️ **Data Subject Requests** — GDPR/NDPR-aligned erasure and export workflows.
-- 🌿 **Climate-Response Worklists** — Priority queues for field workers in disaster zones.
+- **Supabase JWT Authentication** — Row-level security, token refresh, device-pepper identity binding.
+- **Clinical Continuity** — Patient records, consent grants, and emergency access overrides.
+- **USSD Gateway** — Africa's Talking integration for 2G / feature-phone health workers.
+- **NFC Provisioning** — NTAG215 station registration and tap-event processing.
+- **FHIR R4 / DHIS2 Bridge** — Standards-compliant interoperability exports.
+- **Rewards & Settlement** — Token minting, wallet crediting, and accounting ledger.
+- **Notifications** — Outbox-pattern worker for reliable push/SMS delivery.
+- **Privacy-Preserving Analytics** — Aggregate-only reporting; no PII in query results.
+- **Localization Governance** — Translation workflow with approval gating and audit trail.
+- **Data Subject Requests** — GDPR/NDPR-aligned erasure and export workflows.
+- **Climate-Response Worklists** — Priority queues for field workers in disaster zones.
 
 ---
 
@@ -110,7 +110,7 @@ Key groups of variables:
 | **Storage** | `NFT_STORAGE_KEY`, `WEB3_STORAGE_TOKEN` |
 | **CORS** | `CORS_ORIGINS` (comma-separated list of allowed origins) |
 
-> ⚠️ The API **refuses to start** in production while any placeholder value remains in the configuration.
+> The API **refuses to start** in production while any placeholder value remains in the configuration.
 
 ---
 
