@@ -1,100 +1,66 @@
 const { DomainError } = require('../../utils/domainError');
 const { withTenantTransaction } = require('../tenantContext');
+const {
+  DEFAULT_REWARD_ANOMALY_POLICY,
+  resolveRewardPolicy,
+  rulesAnomalies,
+  mean,
+  stdDev,
+  zScore,
+} = require('./rewardRiskScoring');
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
-
-function mean(values) {
-  if (values.length === 0) return 0;
-  return values.reduce((total, value) => total + value, 0) / values.length;
-}
-
-function stdDev(values) {
-  if (values.length < 2) return 0;
-  const average = mean(values);
-  const variance = values.reduce(
-    (total, value) => total + (value - average) ** 2,
-    0
-  ) / (values.length - 1);
-  return Math.sqrt(variance);
-}
-
-function zScore(value, average, deviation) {
-  if (deviation === 0) return 0;
-  return (value - average) / deviation;
-}
 
 function clamp01(value) {
   return Math.min(1, Math.max(0, value));
 }
 
-function signalsFor(redemption, contextByRedeemer, referenceCounts, merchantStats) {
+// Retained for callers and focused tests that score a single prepared record.
+function signalsFor(redemption, contextByRedeemer, referenceCounts, merchantStats, policyInput = {}) {
+  const policy = resolveRewardPolicy(policyInput);
   const amount = Number(redemption.amount);
   const signals = [];
-  const velocity = contextByRedeemer.get(redemption.redeemedBySubjectId)?.count || 0;
-  if (velocity >= 3) {
-    signals.push(`high_redemption_velocity:${velocity}`);
+  const velocityEntry = contextByRedeemer.get(redemption.id)
+    || contextByRedeemer.get(redemption.redeemedBySubjectId)
+    || { count: 0 };
+  const velocity = velocityEntry.count || 0;
+  if (velocity >= policy.velocityThreshold) {
+    signals.push(`high_redemption_velocity:${velocity}:window_hours=${policy.velocityWindowHours}`);
   }
-  const referenceCount = referenceCounts.get(redemption.merchantReference) || 1;
-  if (referenceCount > 1) {
-    signals.push(`reused_merchant_reference:${referenceCount}`);
-  }
-  const stats = merchantStats.get(redemption.merchantId);
+  const reference = String(redemption.merchantReference || '').trim();
+  const referenceCount = reference ? (referenceCounts.get(reference) || 1) : 1;
+  if (referenceCount > 1) signals.push(`reused_merchant_reference:${referenceCount}`);
+  const stats = merchantStats.get(redemption.id) || merchantStats.get(redemption.merchantId);
+  let amountZScore = null;
   if (stats) {
-    const z = zScore(amount, stats.mean, stats.stdDev);
-    if (z >= 2.5) signals.push(`amount_outlier:z=${z.toFixed(1)}`);
+    const deviation = stats.effectiveStdDev || stats.stdDev;
+    amountZScore = zScore(amount, stats.mean, deviation);
+    if (amountZScore >= policy.amountOutlierZThreshold) {
+      signals.push(`amount_outlier:z=${amountZScore.toFixed(1)}:baseline=${stats.source || 'merchant'}`);
+    }
   }
-  const weight = {
-    high_redemption_velocity: 0.6,
-    reused_merchant_reference: 0.5,
-    amount_outlier: 0.5,
+  const weights = {
+    high_redemption_velocity: policy.velocityWeight,
+    reused_merchant_reference: policy.reusedReferenceWeight,
+    amount_outlier: policy.amountOutlierWeight,
   };
-  const score = signals.length === 0
-    ? 0
-    : clamp01(signals.reduce((total, signal) => total + weight[signal.split(':')[0]], 0));
-  return { signals, score, suspicious: score >= 0.6 };
-}
-
-function rulesAnomalies(redemptions) {
-  const contextByRedeemer = new Map();
-  for (const redemption of redemptions) {
-    const entry = contextByRedeemer.get(redemption.redeemedBySubjectId) || { count: 0 };
-    entry.count += 1;
-    contextByRedeemer.set(redemption.redeemedBySubjectId, entry);
-  }
-  const referenceCounts = new Map();
-  for (const redemption of redemptions) {
-    referenceCounts.set(
-      redemption.merchantReference,
-      (referenceCounts.get(redemption.merchantReference) || 0) + 1
-    );
-  }
-  const merchantStats = new Map();
-  for (const redemption of redemptions) {
-    const stats = merchantStats.get(redemption.merchantId) || { values: [] };
-    stats.values.push(Number(redemption.amount));
-    merchantStats.set(redemption.merchantId, stats);
-  }
-  for (const [merchantId, stats] of merchantStats) {
-    merchantStats.set(merchantId, { mean: mean(stats.values), stdDev: stdDev(stats.values) });
-  }
-  return redemptions.map((redemption) => {
-    const { signals, score, suspicious } = signalsFor(redemption, contextByRedeemer, referenceCounts, merchantStats);
-    return {
-      redemptionId: redemption.id,
-      amount: Number(redemption.amount),
-      merchantId: redemption.merchantId,
-      merchantReference: redemption.merchantReference,
-      redeemedAt: redemption.redeemedAt,
-      suspicious,
-      score,
-      signals,
-    };
-  });
+  const score = clamp01(signals.reduce(
+    (total, signal) => total + weights[signal.split(':')[0]],
+    0
+  ));
+  return {
+    signals,
+    score,
+    suspicious: score >= policy.suspiciousScoreThreshold,
+  };
 }
 
 function createRewardAnomalyService(prismaClient, options = {}) {
   const database = prismaClient || require('../../utils/prisma').prisma;
+  const policy = resolveRewardPolicy(
+    options.policy || require('../../config/riskScoring').reward
+  );
   const ai = options.ai || (() => {
     const config = require('../../config');
     const { createAiClient } = require('./aiClient');
@@ -106,11 +72,15 @@ function createRewardAnomalyService(prismaClient, options = {}) {
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
       throw new DomainError(400, 'VALIDATION_ERROR', 'limit must be between 1 and 500');
     }
+    const historyLimit = Math.min(
+      MAX_LIMIT,
+      Math.max(limit, DEFAULT_LIMIT, policy.minimumOutlierPeers + 1)
+    );
     const redemptions = await withTenantTransaction(database, context.organizationId, async (transaction) => (
       transaction.rewardRedemption.findMany({
         where: { organizationId: context.organizationId, status: 'COMPLETED' },
         orderBy: { redeemedAt: 'desc' },
-        take: limit,
+        take: historyLimit,
         select: {
           id: true,
           amount: true,
@@ -122,23 +92,29 @@ function createRewardAnomalyService(prismaClient, options = {}) {
       })
     ));
     if (redemptions.length === 0) {
-      return { source: 'rules', model: null, items: [], note: 'No completed redemptions found.' };
+      return {
+        source: 'rules',
+        model: null,
+        policyVersion: policy.version,
+        items: [],
+        note: 'No completed redemptions found.',
+      };
     }
 
-    const ranked = rulesAnomalies(redemptions)
-      .sort((left, right) => right.score - left.score);
+    const ranked = rulesAnomalies(redemptions, policy)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit);
     if (!ai.enabled) {
-      return { source: 'rules', model: null, items: ranked };
+      return { source: 'rules', model: null, policyVersion: policy.version, items: ranked };
     }
 
     const fallback = () => ({ anomalies: [] });
     const { value: reviewed, fellBack } = await ai.completeJson({
       system: [
-        'You are a fraud analyst for a reward redemption ledger (Medfinet).',
-        'Review the redemption signals below. Flag only genuinely suspicious patterns',
-        '(for example rapid repeated redemptions by the same caregiver, reused merchant',
-        'references, or amounts far above the merchant normal).',
-        'Provide one short reason per flagged redemption.',
+        'Review the deterministic reward-redemption risk signals below.',
+        'Treat each score as a prioritization aid, not proof of misconduct.',
+        'Do not remove a flag already produced by the deterministic rules.',
+        'Return one short reason for each record you flag.',
       ].join('\n'),
       user: `Redemption signals: ${JSON.stringify(ranked.slice(0, 15).map((item) => ({
         redemptionId: item.redemptionId,
@@ -147,6 +123,7 @@ function createRewardAnomalyService(prismaClient, options = {}) {
         merchantReference: item.merchantReference,
         score: item.score,
         signals: item.signals,
+        evidence: item.evidence,
       })))}`,
       schema: {
         anomalies: [{ redemptionId: 'string', suspicious: 'boolean', reason: 'string' }],
@@ -157,7 +134,8 @@ function createRewardAnomalyService(prismaClient, options = {}) {
 
     const byId = new Map(ranked.map((item) => [item.redemptionId, item]));
     const verdicts = new Map(
-      (reviewed.anomalies || []).filter((entry) => byId.has(entry.redemptionId))
+      (reviewed.anomalies || [])
+        .filter((entry) => byId.has(entry.redemptionId))
         .map((entry) => [entry.redemptionId, entry])
     );
     const items = ranked.map((item) => {
@@ -169,7 +147,12 @@ function createRewardAnomalyService(prismaClient, options = {}) {
         reason: verdict.reason || null,
       };
     });
-    return { source: fellBack ? 'rules' : 'ai', model: fellBack ? null : ai.model, items };
+    return {
+      source: fellBack ? 'rules' : 'ai',
+      model: fellBack ? null : ai.model,
+      policyVersion: policy.version,
+      items,
+    };
   }
 
   return { detect };
@@ -182,4 +165,6 @@ module.exports = {
   zScore,
   mean,
   stdDev,
+  resolveRewardPolicy,
+  DEFAULT_REWARD_ANOMALY_POLICY,
 };

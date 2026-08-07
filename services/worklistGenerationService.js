@@ -1,6 +1,12 @@
 const { DomainError } = require('../utils/domainError');
 const { withTenantTransaction } = require('./tenantContext');
 const { normalizeAreaCodes, vulnerabilityRange } = require('./worklistCriteria');
+const {
+  DEFAULT_CLIMATE_RISK_POLICY,
+  resolveClimateRiskPolicy,
+  priorityForRiskScore,
+  computeClimateRisk,
+} = require('./climateRiskScoring');
 
 function audit(context, action, entityId, metadata) {
   return {
@@ -14,8 +20,14 @@ function audit(context, action, entityId, metadata) {
   };
 }
 
-function createWorklistGenerationService(prismaClient, { now = () => new Date() } = {}) {
+function createWorklistGenerationService(
+  prismaClient,
+  { now = () => new Date(), policy: policyInput } = {}
+) {
   const database = prismaClient || require('../utils/prisma').prisma;
+  const policy = resolveClimateRiskPolicy(
+    policyInput || require('../config/riskScoring').climate
+  );
 
   async function requestGeneration(context, worklistId) {
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
@@ -53,9 +65,15 @@ function createWorklistGenerationService(prismaClient, { now = () => new Date() 
         update: {},
       });
       await transaction.auditEvent.create({
-        data: audit(context, 'worklist.generation-requested', worklist.id),
+        data: audit(context, 'worklist.generation-requested', worklist.id, {
+          scoringPolicyVersion: policy.version,
+        }),
       });
-      return { worklistId: worklist.id, outboxEventId: event.id };
+      return {
+        worklistId: worklist.id,
+        outboxEventId: event.id,
+        scoringPolicyVersion: policy.version,
+      };
     });
   }
 
@@ -90,6 +108,9 @@ function createWorklistGenerationService(prismaClient, { now = () => new Date() 
           childId: true,
           vulnerability: true,
           administrativeAreaCode: true,
+          displaced: true,
+          hazardExposure: true,
+          assessedAt: true,
         },
         orderBy: { childId: 'asc' },
         take: 501,
@@ -107,20 +128,29 @@ function createWorklistGenerationService(prismaClient, { now = () => new Date() 
       });
       const hasMore = profiles.length > 500;
       const batchProfiles = profiles.slice(0, 500);
-      const created = batchProfiles.length
+      const scoredAt = now();
+      const scoredProfiles = batchProfiles.map((profile) => ({
+        profile,
+        risk: computeClimateRisk(profile, { assessedAt: scoredAt, policy }),
+      }));
+      const created = scoredProfiles.length
         ? await transaction.worklistEntry.createMany({
-          data: batchProfiles.map((profile) => ({
+          data: scoredProfiles.map(({ profile, risk }) => ({
             organizationId: context.organizationId,
             worklistId,
             childId: profile.childId,
             eligibility: 'ELIGIBLE',
-            eligibilityReason: `Profile matched affected area ${profile.administrativeAreaCode}`,
-            priority: profile.vulnerability,
+            eligibilityReason: [
+              `Profile matched affected area ${profile.administrativeAreaCode}`,
+              `deterministic risk score ${risk.score}/100`,
+              `factors: ${risk.factors.join(', ')}`,
+              `policy: ${risk.policyVersion}`,
+            ].join('; '),
+            priority: risk.priority,
           })),
           skipDuplicates: true,
         })
         : { count: 0 };
-      const generatedAt = now();
       const nextCursor = hasMore ? batchProfiles.at(-1).childId : null;
       const generated = await transaction.beneficiaryWorklist.update({
         where: { id: worklist.id },
@@ -128,7 +158,7 @@ function createWorklistGenerationService(prismaClient, { now = () => new Date() 
           generationComplete: !hasMore,
           generationCursor: nextCursor,
           generatedCount: { increment: created.count },
-          ...(hasMore ? {} : { generatedAt }),
+          ...(hasMore ? {} : { generatedAt: scoredAt }),
         },
       });
       if (hasMore) {
@@ -143,11 +173,24 @@ function createWorklistGenerationService(prismaClient, { now = () => new Date() 
           },
         });
       }
+      const priorityCounts = scoredProfiles.reduce((counts, { risk }) => {
+        counts[risk.priority] = (counts[risk.priority] || 0) + 1;
+        return counts;
+      }, {});
+      const averageRiskScore = scoredProfiles.length === 0
+        ? null
+        : Math.round(
+          scoredProfiles.reduce((total, { risk }) => total + risk.score, 0)
+          / scoredProfiles.length
+        );
       await transaction.auditEvent.create({
         data: audit(context, 'worklist.generation-batch', worklist.id, {
           batchEntryCount: created.count,
           generationComplete: !hasMore,
           nextCursor,
+          scoringPolicyVersion: policy.version,
+          priorityCounts,
+          averageRiskScore,
         }),
       });
       return {
@@ -155,6 +198,11 @@ function createWorklistGenerationService(prismaClient, { now = () => new Date() 
         batchEntryCount: created.count,
         generationComplete: !hasMore,
         nextCursor,
+        scoring: {
+          policyVersion: policy.version,
+          priorityCounts,
+          averageRiskScore,
+        },
       };
     });
   }
@@ -162,4 +210,10 @@ function createWorklistGenerationService(prismaClient, { now = () => new Date() 
   return { requestGeneration, processGenerationBatch };
 }
 
-module.exports = { createWorklistGenerationService };
+module.exports = {
+  createWorklistGenerationService,
+  computeClimateRisk,
+  priorityForRiskScore,
+  resolveClimateRiskPolicy,
+  DEFAULT_CLIMATE_RISK_POLICY,
+};
