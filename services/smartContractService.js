@@ -9,6 +9,23 @@ class SmartContractService {
     this.network = this.algorandService.network;
   }
 
+  async assertApplicationExists(appId) {
+    const normalizedAppId = Number(appId);
+    if (!Number.isSafeInteger(normalizedAppId) || normalizedAppId <= 0) {
+      throw new Error('Campaign application ID is invalid');
+    }
+    try {
+      await this.algorandService.algodClient
+        .getApplicationByID(normalizedAppId)
+        .do();
+    } catch {
+      throw new Error(
+        `Campaign application ${normalizedAppId} was not found on ${this.network}. Select the network where the campaign was created.`
+      );
+    }
+    return normalizedAppId;
+  }
+
   async createCampaignEscrow(campaignData) {
     try {
       const approvalProgram = await this.compileTealProgram('campaign_escrow_approval.teal');
@@ -48,8 +65,9 @@ class SmartContractService {
 
   async donateToCampaign({ appId, donor, amount }) {
     try {
+      const normalizedAppId = await this.assertApplicationExists(appId);
       const suggestedParams = await this.algorandService.getSuggestedParams();
-      const appAddress = algosdk.getApplicationAddress(Number(appId)).toString();
+      const appAddress = algosdk.getApplicationAddress(normalizedAppId).toString();
       const amountMicroAlgos = Math.floor(Number(amount) * 1_000_000);
 
       if (!algosdk.isValidAddress(donor)) {
@@ -68,7 +86,7 @@ class SmartContractService {
       const appCallTxn = algosdk.makeApplicationNoOpTxnFromObject({
         sender: donor,
         suggestedParams,
-        appIndex: Number(appId),
+        appIndex: normalizedAppId,
         appArgs: [new TextEncoder().encode('donate')],
       });
       const transactions = [paymentTxn, appCallTxn];
@@ -90,11 +108,12 @@ class SmartContractService {
         throw new Error('Creator wallet is not a valid Algorand address');
       }
 
+      const normalizedAppId = await this.assertApplicationExists(appId);
       const suggestedParams = await this.algorandService.getSuggestedParams();
       const withdrawTxn = algosdk.makeApplicationNoOpTxnFromObject({
         sender: creator,
         suggestedParams,
-        appIndex: Number(appId),
+        appIndex: normalizedAppId,
         appArgs: [new TextEncoder().encode('withdraw')],
       });
       const acknowledgementTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
@@ -118,8 +137,9 @@ class SmartContractService {
 
   async getCampaignState(appId) {
     try {
+      const normalizedAppId = await this.assertApplicationExists(appId);
       const appInfo = await this.algorandService.algodClient
-        .getApplicationByID(Number(appId))
+        .getApplicationByID(normalizedAppId)
         .do();
       return appInfo.params['global-state'];
     } catch (error) {
