@@ -1,25 +1,37 @@
-// src/controllers/donation.controller.js
 const { prisma } = require('../../utils/prisma');
+const { networkFromRequest } = require('../../services/blockchain/networkRegistry');
 
-let smartContractService;
-let escrowService;
-function getSmartContractService() {
-  if (!smartContractService) {
+const smartContractServices = new Map();
+const escrowServices = new Map();
+
+function getSmartContractService(network) {
+  if (!smartContractServices.has(network)) {
     const SmartContractService = require('../../services/smartContractService');
-    smartContractService = new SmartContractService();
+    smartContractServices.set(network, new SmartContractService(network));
   }
-  return smartContractService;
+  return smartContractServices.get(network);
 }
-function getEscrowService() {
-  if (!escrowService) {
+
+function getEscrowService(network) {
+  if (!escrowServices.has(network)) {
     const EscrowService = require('../../services/escrowService');
-    escrowService = new EscrowService();
+    escrowServices.set(network, new EscrowService(network));
   }
-  return escrowService;
+  return escrowServices.get(network);
+}
+
+function failure(res, error, fallback) {
+  return res.status(error.status || 500).json({
+    success: false,
+    code: error.code || 'BLOCKCHAIN_OPERATION_FAILED',
+    message: fallback,
+    error: error.message,
+  });
 }
 
 const prepareDonation = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { campaignId, amount, donorWallet } = req.body;
     const campaign = await prisma.campaign.findUnique({
       where: { id: campaignId },
@@ -28,27 +40,22 @@ const prepareDonation = async (req, res) => {
     if (!campaign || !campaign.appId) {
       return res.status(404).json({
         success: false,
-        message: 'Campaign not found or not active'
+        message: 'Campaign not found or not active',
       });
     }
-
-    // Check if campaign is still active
     if (campaign.status !== 'ACTIVE') {
       return res.status(400).json({
         success: false,
-        message: 'Campaign is not active'
+        message: 'Campaign is not active',
       });
     }
-
-    // Check if campaign has ended
     if (new Date() > campaign.endDate) {
       return res.status(400).json({
         success: false,
-        message: 'Campaign has ended'
+        message: 'Campaign has ended',
       });
     }
 
-    // Create donation record
     const donation = await prisma.donation.create({
       data: {
         amount: parseFloat(amount),
@@ -59,117 +66,80 @@ const prepareDonation = async (req, res) => {
       },
     });
 
-    // Prepare unsigned transaction for donor to sign
-    // const { unsignedTxn, txId } = await smartContractService.donateToCampaign({
-    //   appId: campaign.appId,
-    //   donor: donorWallet,
-    //   amount: parseFloat(amount),
-    // });
-
-    // // Convert transaction to base64 for frontend
-    // const unsignedTxnBase64 = Buffer.from(unsignedTxn.toByte()).toString('base64');
-
-    // res.status(200).json({
-    //   success: true,
-    //   data: {
-    //     donationId: donation.id,
-    //     unsignedTransaction: unsignedTxnBase64,
-    //     transactionHash: txId,
-    //     campaign: {
-    //       title: campaign.title,
-    //       escrowAddress: campaign.escrowAddress,
-    //     },
-    //   },
-    //   message: 'Donation transaction prepared'
-    // });
-    // Prepare transactions for donor to sign
-    const { transactions, txId } = await getSmartContractService().donateToCampaign({
+    const { transactions, txId } = await getSmartContractService(network).donateToCampaign({
       appId: campaign.appId,
       donor: donorWallet,
       amount: parseFloat(amount),
     });
-
-    // Convert all transactions to base64 for frontend
-    const unsignedTransactionsBase64 = transactions.map(txn => 
-      Buffer.from(txn.toByte()).toString('base64')
+    const unsignedTransactionsBase64 = transactions.map((transaction) =>
+      Buffer.from(transaction.toByte()).toString('base64')
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         donationId: donation.id,
-        unsignedTransactions: unsignedTransactionsBase64, // Now plural - array of transactions
+        network,
+        unsignedTransactions: unsignedTransactionsBase64,
         transactionHash: txId,
         campaign: {
           title: campaign.title,
           escrowAddress: campaign.escrowAddress,
         },
       },
-      message: 'Donation transactions prepared'
+      message: `Donation transactions prepared on ${network}`,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to prepare donation',
-      error: error.message
-    });
+    return failure(res, error, 'Failed to prepare donation');
   }
 };
 
 const confirmDonation = async (req, res) => {
   try {
-    const { donationId, signedTransaction } = req.body;
+    const { donationId, signedTransaction, network: preparedNetwork } = req.body;
+    const network = networkFromRequest(req, preparedNetwork);
+    const txId = await getEscrowService(network).processDonation(
+      donationId,
+      signedTransaction
+    );
 
-    // Convert base64 signed transaction back to Uint8Array
-    // const signedTxn = new Uint8Array(Buffer.from(signedTransaction, 'base64'));
-    // Process the donation
-    const txId = await getEscrowService().processDonation(donationId, signedTransaction);
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         transactionHash: txId,
+        network,
       },
-      message: 'Donation confirmed successfully'
+      message: `Donation confirmed successfully on ${network}`,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to confirm donation',
-      error: error.message
-    });
+    return failure(res, error, 'Failed to confirm donation');
   }
 };
 
 const getDonations = async (req, res) => {
   try {
     const { campaignId } = req.params;
-
     const donations = await prisma.donation.findMany({
       where: { campaignId },
       include: {
         donor: {
-          select: { name: true, wallet: true }
+          select: { name: true, wallet: true },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: donations,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch donations',
-      error: error.message
-    });
+    return failure(res, error, 'Failed to fetch donations');
   }
 };
 
 module.exports = {
   prepareDonation,
   confirmDonation,
-  getDonations
+  getDonations,
 };

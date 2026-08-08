@@ -1,21 +1,13 @@
 const config = require('../config');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
+const {
+  defaultNetwork,
+  getNetworkConfig,
+  networkFromRequest,
+  listAvailableNetworks,
+} = require('../services/blockchain/networkRegistry');
 
 const receiptStore = new AnchorReceiptRepository();
-
-function getWalletCapability(networkName) {
-  const normalized = String(networkName || '').toLowerCase();
-  let chainId = 4160;
-
-  if (normalized.includes('mainnet')) chainId = 416001;
-  if (normalized.includes('testnet')) chainId = 416002;
-  if (normalized.includes('betanet')) chainId = 416003;
-
-  return {
-    provider: 'pera',
-    chainId,
-  };
-}
 
 async function getAnchor(req, res, next) {
   try {
@@ -94,6 +86,8 @@ async function getBlockchainHealth(req, res, next) {
         data: {
           enabled: false,
           status: 'disabled',
+          selectedNetwork: null,
+          availableNetworks: [],
           network: null,
           reachable: false,
           walletConnect: {
@@ -110,29 +104,41 @@ async function getBlockchainHealth(req, res, next) {
       });
     }
 
+    let selectedNetwork;
+    try {
+      selectedNetwork = networkFromRequest(req);
+    } catch (error) {
+      if (error.code !== 'ALGORAND_NETWORK_NOT_ALLOWED') throw error;
+      selectedNetwork = defaultNetwork();
+    }
+
+    const selectedConfig = getNetworkConfig(selectedNetwork);
     const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
     const BlockchainAnchorService = require('../services/blockchain/BlockchainAnchorService');
-    const adapter = new AlgorandAdapter(config.algorand);
+    const adapter = new AlgorandAdapter(selectedConfig);
     const anchorService = new BlockchainAnchorService(adapter, receiptStore, {
       enabled: true,
-      fee: config.algorand.fee,
+      fee: selectedConfig.fee,
     });
     const reachable = await anchorService.isReachable();
     const balance = reachable ? await anchorService.getWalletBalance() : null;
-    const walletCapability = getWalletCapability(adapter.networkName);
 
     return res.json({
       success: true,
       data: {
         enabled: true,
         status: reachable ? 'available' : 'unreachable',
+        selectedNetwork,
+        availableNetworks: listAvailableNetworks(),
         network: adapter.networkName,
         reachable,
         address: adapter.platformAccount.addr.toString(),
         balanceMicroAlgos: balance,
+        explorerTransactionUrl: selectedConfig.explorerTransactionUrl,
         walletConnect: {
           enabled: true,
-          ...walletCapability,
+          provider: 'pera',
+          chainId: selectedConfig.chainId,
         },
         features: {
           anchors: true,

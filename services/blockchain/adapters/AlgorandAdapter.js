@@ -4,15 +4,20 @@ const ChainAdapter = require('../ChainAdapter');
 class AlgorandAdapter extends ChainAdapter {
   constructor(config) {
     super();
-    this.config = config;
+    const resolvedConfig = config?.network
+      ? config
+      : require('../networkRegistry').getNetworkConfig();
+    this.config = resolvedConfig;
     this.client = new algosdk.Algodv2(
-      config.algodToken || '',
-      config.algodServer,
-      config.algodPort
+      resolvedConfig.algodToken || '',
+      resolvedConfig.algodServer,
+      resolvedConfig.algodPort
     );
-    this.platformAccount = algosdk.mnemonicToSecretKey(config.platformWalletMnemonic);
-    this._confirmationRounds = config.confirmationRounds || 4;
-    this._fee = config.fee || 1_000;
+    this.platformAccount = algosdk.mnemonicToSecretKey(
+      resolvedConfig.platformWalletMnemonic
+    );
+    this._confirmationRounds = resolvedConfig.confirmationRounds || 4;
+    this._fee = resolvedConfig.fee || 1_000;
   }
 
   get defaultFee() {
@@ -20,10 +25,19 @@ class AlgorandAdapter extends ChainAdapter {
   }
 
   get networkName() {
+    if (this.config.networkName) return this.config.networkName;
     const host = new URL(this.config.algodServer).hostname;
     if (host.includes('testnet')) return 'Algorand TestNet';
     if (host.includes('mainnet')) return 'Algorand MainNet';
     return 'Algorand';
+  }
+
+  get networkId() {
+    return this.config.network || null;
+  }
+
+  get chainId() {
+    return this.config.chainId || null;
   }
 
   async submitTransaction(note, fee) {
@@ -48,6 +62,7 @@ class AlgorandAdapter extends ChainAdapter {
       txId,
       blockHeight: confirmed['confirmed-round'],
       confirmations: this._confirmationRounds,
+      network: this.networkId,
     };
   }
 

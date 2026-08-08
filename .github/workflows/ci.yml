@@ -23,7 +23,24 @@ jobs:
           --health-retries 20
     env:
       PUPPETEER_SKIP_DOWNLOAD: 'true'
+      NODE_ENV: test
+      PORT: '3001'
+      CORS_ORIGINS: http://localhost:3000
+      REQUEST_BODY_LIMIT: 1mb
       DATABASE_URL: postgresql://medfinet:medfinet-ci-password@localhost:5432/medfinet_test
+      JWT_SECRET: medfinet-ci-jwt-secret-with-at-least-32-characters
+      JWT_EXPIRES_IN: 24h
+      AUTH_ALLOW_LEGACY_JWT: 'false'
+      SUPABASE_URL: https://medfinet-ci.supabase.co
+      SUPABASE_ANON_KEY: medfinet-ci-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: medfinet-ci-service-role-key
+      INTEGRATION_CREDENTIALS_JSON: '{}'
+      NFC_TAP_BASE_URL: http://localhost:3000/nfc/tap
+      NFC_UID_PEPPER: medfinet-ci-nfc-uid-pepper-at-least-32-characters
+      NFC_PROVISIONING_SECRET: medfinet-ci-nfc-provisioning-secret-at-least-32-characters
+      NFC_REQUIRE_ORIGINALITY_ATTESTATION: 'false'
+      ALGORAND_ENABLED: 'false'
+      AI_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

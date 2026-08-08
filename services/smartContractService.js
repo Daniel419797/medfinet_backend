@@ -4,8 +4,26 @@ const path = require('node:path');
 const AlgorandService = require('./algorandService');
 
 class SmartContractService {
-  constructor() {
-    this.algorandService = new AlgorandService();
+  constructor(network) {
+    this.algorandService = new AlgorandService(network);
+    this.network = this.algorandService.network;
+  }
+
+  async assertApplicationExists(appId) {
+    const normalizedAppId = Number(appId);
+    if (!Number.isSafeInteger(normalizedAppId) || normalizedAppId <= 0) {
+      throw new Error('Campaign application ID is invalid');
+    }
+    try {
+      await this.algorandService.algodClient
+        .getApplicationByID(normalizedAppId)
+        .do();
+    } catch {
+      throw new Error(
+        `Campaign application ${normalizedAppId} was not found on ${this.network}. Select the network where the campaign was created.`
+      );
+    }
+    return normalizedAppId;
   }
 
   async createCampaignEscrow(campaignData) {
@@ -39,16 +57,17 @@ class SmartContractService {
       const appId = Number(result.applicationIndex || result['application-index']);
       const escrowAddress = algosdk.getApplicationAddress(appId).toString();
 
-      return { escrowAddress, appId, txId };
+      return { escrowAddress, appId, txId, network: this.network };
     } catch (error) {
-      throw new Error(`Failed to create campaign escrow: ${error.message}`);
+      throw new Error(`Failed to create campaign escrow on ${this.network}: ${error.message}`);
     }
   }
 
   async donateToCampaign({ appId, donor, amount }) {
     try {
+      const normalizedAppId = await this.assertApplicationExists(appId);
       const suggestedParams = await this.algorandService.getSuggestedParams();
-      const appAddress = algosdk.getApplicationAddress(Number(appId)).toString();
+      const appAddress = algosdk.getApplicationAddress(normalizedAppId).toString();
       const amountMicroAlgos = Math.floor(Number(amount) * 1_000_000);
 
       if (!algosdk.isValidAddress(donor)) {
@@ -67,7 +86,7 @@ class SmartContractService {
       const appCallTxn = algosdk.makeApplicationNoOpTxnFromObject({
         sender: donor,
         suggestedParams,
-        appIndex: Number(appId),
+        appIndex: normalizedAppId,
         appArgs: [new TextEncoder().encode('donate')],
       });
       const transactions = [paymentTxn, appCallTxn];
@@ -76,9 +95,10 @@ class SmartContractService {
       return {
         transactions,
         txId: paymentTxn.txID(),
+        network: this.network,
       };
     } catch (error) {
-      throw new Error(`Failed to create donation transaction: ${error.message || error}`);
+      throw new Error(`Failed to create donation transaction on ${this.network}: ${error.message || error}`);
     }
   }
 
@@ -88,11 +108,12 @@ class SmartContractService {
         throw new Error('Creator wallet is not a valid Algorand address');
       }
 
+      const normalizedAppId = await this.assertApplicationExists(appId);
       const suggestedParams = await this.algorandService.getSuggestedParams();
       const withdrawTxn = algosdk.makeApplicationNoOpTxnFromObject({
         sender: creator,
         suggestedParams,
-        appIndex: Number(appId),
+        appIndex: normalizedAppId,
         appArgs: [new TextEncoder().encode('withdraw')],
       });
       const acknowledgementTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
@@ -107,20 +128,22 @@ class SmartContractService {
       return {
         transactions,
         txId: withdrawTxn.txID(),
+        network: this.network,
       };
     } catch (error) {
-      throw new Error(`Failed to create withdrawal transaction: ${error.message || error}`);
+      throw new Error(`Failed to create withdrawal transaction on ${this.network}: ${error.message || error}`);
     }
   }
 
   async getCampaignState(appId) {
     try {
+      const normalizedAppId = await this.assertApplicationExists(appId);
       const appInfo = await this.algorandService.algodClient
-        .getApplicationByID(Number(appId))
+        .getApplicationByID(normalizedAppId)
         .do();
       return appInfo.params['global-state'];
     } catch (error) {
-      throw new Error(`Failed to get campaign state: ${error.message || error}`);
+      throw new Error(`Failed to get campaign state on ${this.network}: ${error.message || error}`);
     }
   }
 

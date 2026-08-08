@@ -7,7 +7,7 @@ All runtime configuration is loaded from environment variables through `config/i
 1. Copy `.env.example` to `.env`.
 2. Replace every `replace-with-...` value with a real development credential.
 3. Generate a random `JWT_SECRET` containing at least 32 characters.
-4. Use a newly rotated Pinata JWT. Do not reuse the credential that was previously committed to source.
+4. Generate distinct peppers and encryption keys for the security variables documented in `.env.example`.
 5. Keep `.env` out of Git. Only `.env.example` is intended for source control.
 
 The repository includes a local `.env` template with placeholders, but the API will not be operational until those placeholders are replaced.
@@ -15,6 +15,39 @@ The repository includes a local `.env` template with placeholders, but the API w
 ## Production
 
 Configure the same names in the deployment platform's secret manager. Do not upload or commit a production `.env` file. Restrict `CORS_ORIGINS` to the exact deployed frontend origins and use separate credentials for development, staging, and production.
+
+## Algorand networks
+
+`ALGORAND_ENABLED=true` enables the blockchain capability API and allows the authenticated frontend to expose blockchain evidence, donation, escrow, and Pera Wallet controls.
+
+The deployment can offer TestNet, MainNet, or both:
+
+```env
+ALGORAND_DEFAULT_NETWORK=testnet
+ALGORAND_ALLOWED_NETWORKS=testnet,mainnet
+```
+
+The frontend sends the selected value in `x-algorand-network`. The backend validates it against `ALGORAND_ALLOWED_NETWORKS` and creates the Algod client, Pera chain response, explorer link, transaction preparation, and submission path for that network. TestNet remains the recommended default. MainNet actions use real ALGO and should be enabled only after TestNet validation.
+
+The base `ALGORAND_ALGOD_*` and `ALGORAND_EXPLORER_TRANSACTION_URL` values configure the default network and preserve compatibility with existing deployments. Optional network-specific values override them:
+
+```env
+ALGORAND_TESTNET_ALGOD_SERVER=https://testnet-api.algonode.cloud
+ALGORAND_TESTNET_ALGOD_PORT=443
+ALGORAND_TESTNET_ALGOD_TOKEN=
+ALGORAND_TESTNET_EXPLORER_TRANSACTION_URL=https://testnet.explorer.perawallet.app/tx
+
+ALGORAND_MAINNET_ALGOD_SERVER=https://mainnet-api.algonode.cloud
+ALGORAND_MAINNET_ALGOD_PORT=443
+ALGORAND_MAINNET_ALGOD_TOKEN=
+ALGORAND_MAINNET_EXPLORER_TRANSACTION_URL=https://explorer.perawallet.app/tx
+```
+
+`ALGORAND_PLATFORM_WALLET_MNEMONIC` remains a backend-only secret. The same Algorand account address can exist on both networks, but its TestNet and MainNet balances are independent. Never expose the mnemonic to the frontend or ask a user for a Pera recovery phrase.
+
+Campaign application IDs are network-specific. Donation and withdrawal preparation checks that the application exists on the selected network and returns a clear error when the user selects the wrong network.
+
+Automated server-side anchoring uses `ALGORAND_DEFAULT_NETWORK`. Interactive donation, escrow, health, wallet, and dashboard requests use the network selected in the authenticated frontend.
 
 ## Risk-scoring policies
 
@@ -28,7 +61,7 @@ Every result includes a policy version and evidence factors. Policy changes shou
 
 ## Required variables
 
-See `.env.example` for the complete list covering the API, database, Supabase, Algorand, storage providers, explorer links, retained campaign settings, and optional deterministic risk-scoring controls. Operational settings such as `JWT_EXPIRES_IN` and `ALGORAND_CONFIRMATION_ROUNDS` are environment-specific as well; do not reintroduce them as source literals.
+See `.env.example` for the complete list covering the API, database, Supabase, Algorand, notification delivery, integration controls, NFC, USSD, AI, and optional deterministic risk-scoring controls. Operational settings such as `JWT_EXPIRES_IN` and `ALGORAND_CONFIRMATION_ROUNDS` are environment-specific; do not reintroduce them as source literals.
 
 After changing credentials, run:
 
@@ -36,5 +69,3 @@ After changing credentials, run:
 npm.cmd test
 npm.cmd start
 ```
-
-The previously source-controlled Pinata credential must be revoked in Pinata's dashboard and its activity reviewed. Removing it from the current source tree does not invalidate copies in Git history.

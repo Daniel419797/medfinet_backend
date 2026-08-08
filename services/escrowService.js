@@ -25,9 +25,10 @@ function decodeSignedTransactions(signedTransaction) {
 }
 
 class EscrowService {
-  constructor() {
-    this.smartContractService = new SmartContractService();
-    this.algorandService = new AlgorandService();
+  constructor(network) {
+    this.smartContractService = new SmartContractService(network);
+    this.algorandService = new AlgorandService(network);
+    this.network = this.algorandService.network;
   }
 
   async initializeCampaignEscrow(campaignId) {
@@ -55,6 +56,7 @@ class EscrowService {
     return {
       escrowAddress: result.escrowAddress,
       appId: result.appId,
+      network: this.network,
     };
   }
 
@@ -91,7 +93,7 @@ class EscrowService {
         where: { id: donationId },
         data: { status: 'FAILED' },
       });
-      throw new Error(`Donation processing failed: ${error.message || error}`);
+      throw new Error(`Donation processing failed on ${this.network}: ${error.message || error}`);
     }
   }
 
@@ -174,6 +176,7 @@ class EscrowService {
       transactionHash: txId,
       amount: campaign.raisedAmount,
       currency: campaign.currency,
+      network: this.network,
     };
   }
 
@@ -214,13 +217,14 @@ class EscrowService {
         transactionHash: txId,
         amount: withdrawal.amount,
         completedAt,
+        network: this.network,
       };
     } catch (error) {
       await prisma.campaignWithdrawal.update({
         where: { id: withdrawalId },
         data: { status: 'FAILED' },
       });
-      throw new Error(`Withdrawal completion failed: ${error.message || error}`);
+      throw new Error(`Withdrawal completion failed on ${this.network}: ${error.message || error}`);
     }
   }
 
@@ -248,6 +252,7 @@ class EscrowService {
     return {
       canWithdraw: true,
       creatorWallet: campaign.creatorWallet,
+      network: this.network,
     };
   }
 
