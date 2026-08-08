@@ -1,164 +1,137 @@
-// src/services/smartContract.service.js
 const algosdk = require('algosdk');
+const fs = require('node:fs');
+const path = require('node:path');
 const AlgorandService = require('./algorandService');
-const fs = require('fs');
-const path = require('path');
 
 class SmartContractService {
   constructor() {
     this.algorandService = new AlgorandService();
   }
 
-   async createCampaignEscrow(campaignData) {
+  async createCampaignEscrow(campaignData) {
     try {
-      // Read TEAL files from local file system
       const approvalProgram = await this.compileTealProgram('campaign_escrow_approval.teal');
       const clearProgram = await this.compileTealProgram('campaign_escrow_clear.teal');
-
       const suggestedParams = await this.algorandService.getSuggestedParams();
-      const platformWallet = await this.algorandService.getPlatformAddress();
+      const platformWallet = this.algorandService.getPlatformAddress();
 
-      // Create application call transaction
       const txn = algosdk.makeApplicationCreateTxnFromObject({
-      sender: platformWallet,            
-      suggestedParams,
-      onComplete: algosdk.OnApplicationComplete.NoOpOC,
-      approvalProgram,
-      clearProgram,
-      numGlobalByteSlices: 8,
-      numGlobalInts: 8,
-      numLocalByteSlices: 0,
-      numLocalInts: 0,
-      appArgs: [
-        new TextEncoder().encode(campaignData.creator),
-        algosdk.encodeUint64(campaignData.targetAmount),
-        algosdk.encodeUint64(campaignData.endTime),
-        new TextEncoder().encode(platformWallet),     
-        
-      ],
-    });
+        sender: platformWallet,
+        suggestedParams,
+        onComplete: algosdk.OnApplicationComplete.NoOpOC,
+        approvalProgram,
+        clearProgram,
+        numGlobalByteSlices: 8,
+        numGlobalInts: 8,
+        numLocalByteSlices: 0,
+        numLocalInts: 0,
+        appArgs: [
+          new TextEncoder().encode(campaignData.creator),
+          algosdk.encodeUint64(campaignData.targetAmount),
+          algosdk.encodeUint64(campaignData.endTime),
+          new TextEncoder().encode(platformWallet),
+        ],
+      });
 
-
-      // Sign and send transaction
-      const signedTxn = txn.signTxn(
-        this.algorandService.platformWallet.sk
-      );
-      
+      const signedTxn = txn.signTxn(this.algorandService.platformWallet.sk);
       const txId = await this.algorandService.sendSignedTransaction(signedTxn);
       const result = await this.algorandService.waitForConfirmation(txId);
-
-      const appId = Number(result['applicationIndex']);
+      const appId = Number(result.applicationIndex || result['application-index']);
       const escrowAddress = algosdk.getApplicationAddress(appId).toString();
 
-      return {
-        escrowAddress,
-        appId,
-        txId,
-      };
+      return { escrowAddress, appId, txId };
     } catch (error) {
       throw new Error(`Failed to create campaign escrow: ${error.message}`);
     }
   }
 
-  async donateToCampaign(params) {
+  async donateToCampaign({ appId, donor, amount }) {
     try {
       const suggestedParams = await this.algorandService.getSuggestedParams();
-      const appAddress = algosdk.getApplicationAddress(params.appId);
-      // Create payment transaction to escrow
+      const appAddress = algosdk.getApplicationAddress(Number(appId)).toString();
+      const amountMicroAlgos = Math.floor(Number(amount) * 1_000_000);
+
+      if (!algosdk.isValidAddress(donor)) {
+        throw new Error('Donor wallet is not a valid Algorand address');
+      }
+      if (!Number.isSafeInteger(amountMicroAlgos) || amountMicroAlgos <= 0) {
+        throw new Error('Donation amount must be greater than zero');
+      }
+
       const paymentTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-        sender: params.donor,
-        receiver: appAddress.toString(),
-        amount: Math.floor(params.amount*1000000),
+        sender: donor,
+        receiver: appAddress,
+        amount: amountMicroAlgos,
         suggestedParams,
       });
-
-      // Create application call to record donation
       const appCallTxn = algosdk.makeApplicationNoOpTxnFromObject({
-        sender: params.donor,
+        sender: donor,
         suggestedParams,
-        appIndex: params.appId,
+        appIndex: Number(appId),
         appArgs: [new TextEncoder().encode('donate')],
-        foreignApps: [params.appId],
       });
+      const transactions = [paymentTxn, appCallTxn];
+      algosdk.assignGroupID(transactions);
 
-      // Group transactions
-      const group = [paymentTxn, appCallTxn];
-      algosdk.assignGroupID(group);
-
-      // return {
-      //   unsignedTxn: group[0], // Return first transaction for signing
-      //   txId: group[0].txID(),
-      // };
-    
-      // Return both transactions
       return {
-        transactions: [paymentTxn, appCallTxn], // Return array of transactions
-        txId: paymentTxn.txID().toString() // Use payment tx as reference
+        transactions,
+        txId: paymentTxn.txID(),
       };
     } catch (error) {
-      throw new Error(`Failed to create donation transaction: ${error}`);
+      throw new Error(`Failed to create donation transaction: ${error.message || error}`);
     }
   }
 
-  async withdrawFunds(params) {
+  async withdrawFunds({ appId, creator }) {
     try {
+      if (!algosdk.isValidAddress(creator)) {
+        throw new Error('Creator wallet is not a valid Algorand address');
+      }
+
       const suggestedParams = await this.algorandService.getSuggestedParams();
-
       const withdrawTxn = algosdk.makeApplicationNoOpTxnFromObject({
-        sender: params.creator,
+        sender: creator,
         suggestedParams,
-        appIndex: params.appId,
+        appIndex: Number(appId),
         appArgs: [new TextEncoder().encode('withdraw')],
-        accounts: [this.algorandService.getPlatformAddress()], // Platform wallet for fees
       });
-
-      const paymentTxn = algosdk.makePaymentTxn({
-        sender: params.creator, // sender (same as above)
+      const acknowledgementTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: creator,
+        receiver: creator,
+        amount: 0,
         suggestedParams,
-        receiver: params.creator, // receiver (withdraw to creator)
-        amount: 0, // amount (will be determined by smart contract)
-        undefined, // closeRemainderTo
-        undefined // note
-    });
-
-      // Group the transactions
-      const group = [withdrawTxn, paymentTxn];
-      const groupID = algosdk.computeGroupID(group);
-      group.forEach(txn => txn.group = groupID);
+      });
+      const transactions = [withdrawTxn, acknowledgementTxn];
+      algosdk.assignGroupID(transactions);
 
       return {
-        unsignedTxn: group, // Return array of transactions
-        txId: withdrawTxn.txID()
+        transactions,
+        txId: withdrawTxn.txID(),
       };
     } catch (error) {
-      throw new Error(`Failed to create withdrawal transaction: ${error}`);
+      throw new Error(`Failed to create withdrawal transaction: ${error.message || error}`);
     }
   }
 
   async getCampaignState(appId) {
     try {
       const appInfo = await this.algorandService.algodClient
-        .getApplicationByID(appId)
+        .getApplicationByID(Number(appId))
         .do();
-      
       return appInfo.params['global-state'];
     } catch (error) {
-      throw new Error(`Failed to get campaign state: ${error}`);
+      throw new Error(`Failed to get campaign state: ${error.message || error}`);
     }
   }
 
   async compileTealProgram(filename) {
     try {
-      // Read TEAL file from local file system
-      const contractsPath = path.join( process.cwd(), filename);
+      const contractsPath = path.join(process.cwd(), filename);
       if (!fs.existsSync(contractsPath)) {
         throw new Error(`TEAL file not found: ${contractsPath}`);
       }
-
       const tealCode = fs.readFileSync(contractsPath, 'utf8');
-      // Compile TEAL code
       const compileResponse = await this.algorandService.algodClient.compile(tealCode).do();
-      
       return new Uint8Array(Buffer.from(compileResponse.result, 'base64'));
     } catch (error) {
       throw new Error(`Failed to compile TEAL program: ${error.message}`);
