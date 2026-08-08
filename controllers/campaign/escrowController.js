@@ -1,41 +1,44 @@
-// src/controllers/escrow.controller.js
 const { prisma } = require('../../utils/prisma');
+const { networkFromRequest } = require('../../services/blockchain/networkRegistry');
 
-let escrowService;
-function getEscrowService() {
-  if (!escrowService) {
+const escrowServices = new Map();
+
+function getEscrowService(network) {
+  if (!escrowServices.has(network)) {
     const EscrowService = require('../../services/escrowService');
-    escrowService = new EscrowService();
+    escrowServices.set(network, new EscrowService(network));
   }
-  return escrowService;
+  return escrowServices.get(network);
+}
+
+function failure(res, error, fallback, status = 400) {
+  return res.status(error.status || status).json({
+    success: false,
+    code: error.code || 'BLOCKCHAIN_OPERATION_FAILED',
+    message: error.message || fallback,
+  });
 }
 
 const initiatePayout = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { campaignId } = req.body;
+    const txId = await getEscrowService(network).processPayout(campaignId);
 
-    const txId = await getEscrowService().processPayout(campaignId);
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      data: {
-        transactionHash: txId,
-      },
-      message: 'Payout initiated successfully'
+      data: { transactionHash: txId, network },
+      message: `Payout initiated successfully on ${network}`,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to initiate payout',
-      error: error.message
-    });
+    return failure(res, error, 'Failed to initiate payout', 500);
   }
 };
 
 const getEscrowBalance = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { campaignId } = req.params;
-
     const campaign = await prisma.campaign.findUnique({
       where: { id: campaignId },
     });
@@ -43,117 +46,117 @@ const getEscrowBalance = async (req, res) => {
     if (!campaign || !campaign.escrowAddress) {
       return res.status(404).json({
         success: false,
-        message: 'Campaign or escrow address not found'
+        message: 'Campaign or escrow address not found',
       });
     }
 
-    const balance = await getEscrowService().getEscrowBalance(campaign.escrowAddress);
+    const balance = await getEscrowService(network).getEscrowBalance(
+      campaign.escrowAddress
+    );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         balance,
         escrowAddress: campaign.escrowAddress,
+        network,
       },
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get escrow balance',
-      error: error.message
-    });
+    return failure(res, error, 'Failed to get escrow balance', 500);
   }
 };
 
-// Initiate withdrawal
 const initiateWithdrawal = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { campaignId } = req.params;
     const { recipientWallet } = req.body;
 
     if (!recipientWallet) {
-      return res.status(400).json({ error: 'Recipient wallet is required' });
+      return res.status(400).json({
+        success: false,
+        message: 'Recipient wallet is required',
+      });
     }
 
-    const result = await getEscrowService().processWithdrawal(campaignId, recipientWallet);
+    const result = await getEscrowService(network).processWithdrawal(
+      campaignId,
+      recipientWallet
+    );
 
-    res.json({
+    return res.json({
       success: true,
-      message: 'Withdrawal initiated successfully',
-      data: result
+      message: `Withdrawal initiated successfully on ${network}`,
+      data: result,
     });
-
   } catch (error) {
-    res.status(400).json({ 
-      error: error.message || 'Failed to initiate withdrawal' 
-    });
+    return failure(res, error, 'Failed to initiate withdrawal');
   }
 };
 
-// Complete withdrawal with signed transaction
 const completeWithdrawal = async (req, res) => {
   try {
     const { withdrawalId } = req.params;
-    const { signedTransaction } = req.body;
+    const { signedTransaction, network: preparedNetwork } = req.body;
+    const network = networkFromRequest(req, preparedNetwork);
 
     if (!signedTransaction) {
-      return res.status(400).json({ error: 'Signed transaction is required' });
+      return res.status(400).json({
+        success: false,
+        message: 'Signed transaction is required',
+      });
     }
 
-    const result = await getEscrowService().completeWithdrawal(withdrawalId, signedTransaction);
+    const result = await getEscrowService(network).completeWithdrawal(
+      withdrawalId,
+      signedTransaction
+    );
 
-    res.json({
+    return res.json({
       success: true,
-      message: 'Withdrawal completed successfully',
-      data: result
+      message: `Withdrawal completed successfully on ${network}`,
+      data: result,
     });
-
   } catch (error) {
-    res.status(400).json({ 
-      error: error.message || 'Failed to complete withdrawal' 
-    });
+    return failure(res, error, 'Failed to complete withdrawal');
   }
 };
 
-// Check withdrawal eligibility
 const checkWithdrawalEligibility = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { campaignId } = req.params;
-    
-    const result = await getEscrowService().canWithdrawCampaign(campaignId);
+    const result = await getEscrowService(network).canWithdrawCampaign(campaignId);
 
-    res.json({
+    return res.json({
       success: true,
-      data: result
+      data: result,
     });
-
   } catch (error) {
-    res.status(400).json({ 
-      error: error.message || 'Failed to check withdrawal eligibility' 
-    });
+    return failure(res, error, 'Failed to check withdrawal eligibility');
   }
 };
 
-// Get withdrawal status
 const getWithdrawalStatus = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { withdrawalId } = req.params;
-    
-    const withdrawal = await getEscrowService().getWithdrawalStatus(withdrawalId);
+    const withdrawal = await getEscrowService(network).getWithdrawalStatus(withdrawalId);
 
     if (!withdrawal) {
-      return res.status(404).json({ error: 'Withdrawal not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Withdrawal not found',
+      });
     }
 
-    res.json({
+    return res.json({
       success: true,
-      data: withdrawal
+      data: { ...withdrawal, network },
     });
-
   } catch (error) {
-    res.status(400).json({ 
-      error: error.message || 'Failed to get withdrawal status' 
-    });
+    return failure(res, error, 'Failed to get withdrawal status');
   }
 };
 
@@ -163,5 +166,5 @@ module.exports = {
   initiateWithdrawal,
   completeWithdrawal,
   checkWithdrawalEligibility,
-  getWithdrawalStatus
+  getWithdrawalStatus,
 };
