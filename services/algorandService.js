@@ -1,19 +1,17 @@
 const algosdk = require('algosdk');
-const config = require('../config');
+const { getNetworkConfig } = require('./blockchain/networkRegistry');
 
 class AlgorandService {
-  constructor() {
-    if (!config.algorand.enabled) {
-      throw new Error('Algorand is disabled in this environment');
-    }
-
+  constructor(network) {
+    this.config = getNetworkConfig(network);
+    this.network = this.config.network;
     this.algodClient = new algosdk.Algodv2(
-      config.algorand.algodToken || '',
-      config.algorand.algodServer,
-      config.algorand.algodPort
+      this.config.algodToken || '',
+      this.config.algodServer,
+      this.config.algodPort
     );
     this.platformWallet = algosdk.mnemonicToSecretKey(
-      config.algorand.platformWalletMnemonic
+      this.config.platformWalletMnemonic
     );
   }
 
@@ -25,7 +23,7 @@ class AlgorandService {
     return algosdk.waitForConfirmation(
       this.algodClient,
       txId,
-      config.algorand.confirmationRounds
+      this.config.confirmationRounds
     );
   }
 
@@ -55,7 +53,7 @@ class AlgorandService {
       const result = await this.algodClient.sendRawTransaction(payload).do();
       return result.txid || result.txId;
     } catch (error) {
-      throw new Error(`Failed to send transaction: ${error.message || error}`);
+      throw new Error(`Failed to send transaction on ${this.network}: ${error.message || error}`);
     }
   }
 
