@@ -20,10 +20,19 @@ class AlgorandAdapter extends ChainAdapter {
   }
 
   get networkName() {
+    if (this.config.networkName) return this.config.networkName;
     const host = new URL(this.config.algodServer).hostname;
     if (host.includes('testnet')) return 'Algorand TestNet';
     if (host.includes('mainnet')) return 'Algorand MainNet';
     return 'Algorand';
+  }
+
+  get networkId() {
+    return this.config.network || null;
+  }
+
+  get chainId() {
+    return this.config.chainId || null;
   }
 
   async submitTransaction(note, fee) {
@@ -48,6 +57,7 @@ class AlgorandAdapter extends ChainAdapter {
       txId,
       blockHeight: confirmed['confirmed-round'],
       confirmations: this._confirmationRounds,
+      network: this.networkId,
     };
   }
 
