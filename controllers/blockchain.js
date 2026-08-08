@@ -1,6 +1,7 @@
 const config = require('../config');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
 const {
+  defaultNetwork,
   getNetworkConfig,
   networkFromRequest,
   listAvailableNetworks,
@@ -103,7 +104,14 @@ async function getBlockchainHealth(req, res, next) {
       });
     }
 
-    const selectedNetwork = networkFromRequest(req);
+    let selectedNetwork;
+    try {
+      selectedNetwork = networkFromRequest(req);
+    } catch (error) {
+      if (error.code !== 'ALGORAND_NETWORK_NOT_ALLOWED') throw error;
+      selectedNetwork = defaultNetwork();
+    }
+
     const selectedConfig = getNetworkConfig(selectedNetwork);
     const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
     const BlockchainAnchorService = require('../services/blockchain/BlockchainAnchorService');
