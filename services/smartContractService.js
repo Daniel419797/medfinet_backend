@@ -4,8 +4,9 @@ const path = require('node:path');
 const AlgorandService = require('./algorandService');
 
 class SmartContractService {
-  constructor() {
-    this.algorandService = new AlgorandService();
+  constructor(network) {
+    this.algorandService = new AlgorandService(network);
+    this.network = this.algorandService.network;
   }
 
   async createCampaignEscrow(campaignData) {
@@ -39,9 +40,9 @@ class SmartContractService {
       const appId = Number(result.applicationIndex || result['application-index']);
       const escrowAddress = algosdk.getApplicationAddress(appId).toString();
 
-      return { escrowAddress, appId, txId };
+      return { escrowAddress, appId, txId, network: this.network };
     } catch (error) {
-      throw new Error(`Failed to create campaign escrow: ${error.message}`);
+      throw new Error(`Failed to create campaign escrow on ${this.network}: ${error.message}`);
     }
   }
 
@@ -76,9 +77,10 @@ class SmartContractService {
       return {
         transactions,
         txId: paymentTxn.txID(),
+        network: this.network,
       };
     } catch (error) {
-      throw new Error(`Failed to create donation transaction: ${error.message || error}`);
+      throw new Error(`Failed to create donation transaction on ${this.network}: ${error.message || error}`);
     }
   }
 
@@ -107,9 +109,10 @@ class SmartContractService {
       return {
         transactions,
         txId: withdrawTxn.txID(),
+        network: this.network,
       };
     } catch (error) {
-      throw new Error(`Failed to create withdrawal transaction: ${error.message || error}`);
+      throw new Error(`Failed to create withdrawal transaction on ${this.network}: ${error.message || error}`);
     }
   }
 
@@ -120,7 +123,7 @@ class SmartContractService {
         .do();
       return appInfo.params['global-state'];
     } catch (error) {
-      throw new Error(`Failed to get campaign state: ${error.message || error}`);
+      throw new Error(`Failed to get campaign state on ${this.network}: ${error.message || error}`);
     }
   }
 
