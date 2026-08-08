@@ -40,11 +40,8 @@
     "helmet": "^7.0.0",
     "jsonwebtoken": "^9.0.0",
     "morgan": "^1.10.0",
-    "nft.storage": "^7.2.0",
     "puppeteer": "^24.11.2",
-    "qrcode": "^1.5.4",
-    "sharp": "^0.34.2",
-    "web3.storage": "^4.5.5"
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.0",
