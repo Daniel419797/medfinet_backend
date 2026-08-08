@@ -1,49 +1,43 @@
-// src/controllers/campaign.controller.js
 const { prisma } = require('../../utils/prisma');
+const { networkFromRequest } = require('../../services/blockchain/networkRegistry');
 
-let escrowService;
-function getEscrowService() {
-  if (!escrowService) {
+const escrowServices = new Map();
+function getEscrowService(network) {
+  if (!escrowServices.has(network)) {
     const EscrowService = require('../../services/escrowService');
-    escrowService = new EscrowService();
+    escrowServices.set(network, new EscrowService(network));
   }
-  return escrowService;
+  return escrowServices.get(network);
 }
 
-// src/controllers/campaign.controller.js - FIXED
 const createCampaign = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { title, description, targetAmount, category, endDate, impactGoal, imageUrl } = req.body;
-    // req.user comes from Supabase auth middleware
-    const supabaseUser = req.user; 
+    const supabaseUser = req.user;
     const id = supabaseUser.hospital_id.toString();
-    // Check if user exists in Prisma, if not create them
     let user = await prisma.user.findUnique({
-      where: { id: id }
+      where: { id },
     });
 
-    // If user doesn't exist in Prisma, create them
     if (!user) {
       user = await prisma.user.create({
         data: {
-          id: id,
+          id,
           email: supabaseUser.admin_email,
           name: supabaseUser.hospital_name || supabaseUser.email,
-          wallet: supabaseUser.wallet_address, // From Supabase profile
-          // Add other fields from Supabase as needed
-        }
+          wallet: supabaseUser.wallet_address,
+        },
       });
     }
 
-    // Check if user has wallet connected
     if (!user.wallet) {
       return res.status(400).json({
         success: false,
-        message: 'Wallet not connected to your account. Please connect your Algorand wallet first.'
+        message: 'Wallet not connected to your account. Please connect your Algorand wallet first.',
       });
     }
 
-    // Create campaign with user's wallet
     const campaign = await prisma.campaign.create({
       data: {
         title,
@@ -52,80 +46,81 @@ const createCampaign = async (req, res) => {
         category,
         endDate: new Date(endDate),
         impactGoal,
-        imageUrl: imageUrl,
-        creatorId: user.id, // Use Prisma user ID
+        imageUrl,
+        creatorId: user.id,
         creatorWallet: user.wallet,
         status: 'PENDING',
       },
     });
 
-    // Initialize escrow smart contract
-    const escrowResult = await getEscrowService().initializeCampaignEscrow(campaign.id);
+    const escrowResult = await getEscrowService(network).initializeCampaignEscrow(campaign.id);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       data: {
         ...campaign,
         ...escrowResult,
+        network,
       },
-      message: 'Campaign created successfully'
+      message: `Campaign created successfully on ${network}`,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(error.status || 500).json({
       success: false,
+      code: error.code || 'CAMPAIGN_CREATION_FAILED',
       message: 'Failed to create campaign',
-      error: error.message
+      error: error.message,
     });
   }
 };
 
-const getCampaigns = async (req, res) => {
+const getCampaigns = async (_req, res) => {
   try {
     const campaigns = await prisma.campaign.findMany({
       include: {
         creator: {
-          select: { name: true, wallet: true }
+          select: { name: true, wallet: true },
         },
         _count: {
-          select: { donations: true }
+          select: { donations: true },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: campaigns,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Failed to fetch campaigns',
-      error: error.message
+      error: error.message,
     });
   }
 };
 
 const getCampaign = async (req, res) => {
   try {
+    const network = networkFromRequest(req);
     const { id } = req.params;
-
     const campaign = await prisma.campaign.findUnique({
       where: { id },
       include: {
         creator: {
-          select: { name: true, email: true, wallet: true }
+          select: { name: true, email: true, wallet: true },
         },
         donations: {
           include: {
             donor: {
-              select: { name: true, wallet: true }
-            }
+              select: { name: true, wallet: true },
+            },
           },
-          orderBy: { createdAt: 'desc' }
+          orderBy: { createdAt: 'desc' },
         },
         updates: {
-          orderBy: { createdAt: 'desc' }
+          orderBy: { createdAt: 'desc' },
         },
       },
     });
@@ -133,28 +128,31 @@ const getCampaign = async (req, res) => {
     if (!campaign) {
       return res.status(404).json({
         success: false,
-        message: 'Campaign not found'
+        message: 'Campaign not found',
       });
     }
 
-    // Get current escrow balance
     let escrowBalance = 0;
     if (campaign.escrowAddress) {
-      escrowBalance = await getEscrowService().getEscrowBalance(campaign.escrowAddress);
+      escrowBalance = await getEscrowService(network).getEscrowBalance(
+        campaign.escrowAddress
+      );
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         ...campaign,
         escrowBalance,
+        network,
       },
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(error.status || 500).json({
       success: false,
+      code: error.code || 'CAMPAIGN_FETCH_FAILED',
       message: 'Failed to fetch campaign',
-      error: error.message
+      error: error.message,
     });
   }
 };
@@ -162,5 +160,5 @@ const getCampaign = async (req, res) => {
 module.exports = {
   createCampaign,
   getCampaigns,
-  getCampaign
+  getCampaign,
 };
