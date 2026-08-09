@@ -1,7 +1,16 @@
 {
   "name": "algorand--backend",
   "version": "1.0.0",
-  "description": "Algorand Smart Contract Crowdfunding Platform",
+  "description": "Open-source API and worker services for the Medfinet child-health continuity platform.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Daniel419797/medfinet_backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Daniel419797/medfinet_backend/issues"
+  },
+  "homepage": "https://github.com/Daniel419797/medfinet_backend#readme",
   "main": "dist/app.js",
   "scripts": {
     "dev": "nodemon app.js",
