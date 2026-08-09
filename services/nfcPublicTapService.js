@@ -3,6 +3,9 @@ const { withTenantTransaction } = require('./tenantContext');
 const { parseMirroredValue } = require('./nfcNdef');
 const { uidDigest, tokenDigest } = require('./nfcIdentity');
 const { assertCardToken } = require('./nfcValidation');
+const {
+  isTagWriterDemoBinding,
+} = require('./nfcTagWriter');
 
 function createNfcPublicTapService(
   prismaClient,
@@ -19,7 +22,6 @@ function createNfcPublicTapService(
     if (!route) {
       throw new DomainError(404, 'NFC_CARD_NOT_FOUND', 'NFC card was not found');
     }
-    const mirrored = parseMirroredValue(input.uc);
     const cardTokenHash = tokenDigest(assertCardToken(input.t));
     const binding = await withTenantTransaction(
       database,
@@ -29,12 +31,13 @@ function createNfcPublicTapService(
           id: route.bindingId,
           organizationId: route.organizationId,
           publicId,
-          uidHash: uidDigest(mirrored.uid, settings.uidPepper),
           credential: { tokenHash: cardTokenHash },
         },
         select: {
           id: true,
           status: true,
+          hardwareFamily: true,
+          uidHash: true,
           originalityVerifiedAt: true,
           credential: { select: { status: true, expiresAt: true } },
         },
@@ -42,6 +45,12 @@ function createNfcPublicTapService(
     );
     if (!binding) {
       throw new DomainError(410, 'NFC_CARD_INACTIVE', 'NFC card is invalid or inactive');
+    }
+    if (!isTagWriterDemoBinding(binding)) {
+      const mirrored = parseMirroredValue(input.uc);
+      if (uidDigest(mirrored.uid, settings.uidPepper) !== binding.uidHash) {
+        throw new DomainError(410, 'NFC_CARD_INACTIVE', 'NFC card is invalid or inactive');
+      }
     }
     return publicStatus(binding, now());
   }
@@ -70,8 +79,10 @@ function publicStatus(binding, currentTime) {
   return {
     recognized: true,
     status,
-    hardwareFamily: 'NTAG_215',
-    assurance: 'BASIC_NDEF',
+    hardwareFamily: binding.hardwareFamily || 'NTAG_215',
+    assurance: isTagWriterDemoBinding(binding)
+      ? 'BASIC_STATIC_NDEF_DEMO'
+      : 'BASIC_NDEF',
     originalityEnrolled: Boolean(binding.originalityVerifiedAt),
     scannerRequired: status === 'ACTIVE',
     message,

@@ -269,6 +269,13 @@ router.post(
   stepUpAuth,
   nfcController.createDraft
 );
+router.post(
+  '/children/:id/nfc-bindings/tagwriter-demo',
+  auth,
+  administrationAccess,
+  nfcLifecycleRateLimit,
+  nfcController.createTagWriterDemo
+);
 router.get(
   '/children/:id/nfc-bindings',
   auth,

@@ -54,6 +54,14 @@ module.exports = {
     (req) => provisioningService.createDraft(context(req), req.params.id, req.body),
     201
   ),
+  createTagWriterDemo: handle(
+    (req) => provisioningService.createTagWriterDemo(
+      context(req),
+      req.params.id,
+      req.body
+    ),
+    201
+  ),
   activate: handle(
     (req) => activationService.activate(
       context(req),

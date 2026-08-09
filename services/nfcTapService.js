@@ -18,6 +18,10 @@ const {
   verifyDeviceSignature,
 } = require('./nfcDeviceAttestation');
 const { loadNfcClinicalSummary } = require('./nfcClinicalSummaryService');
+const {
+  TAGWRITER_DEMO_SCAN_MODE,
+  isTagWriterDemoBinding,
+} = require('./nfcTagWriter');
 
 const NFC_RESOLVER_ROLES = new Set([
   'OWNER',
@@ -122,9 +126,14 @@ function createNfcTapService(
         'NFC challenge token is malformed'
       );
     }
-    const mirrored = parseMirroredValue(input.uc);
+    const scanMode = input.scanMode === 'PWA_NDEF'
+      ? 'PWA_NDEF'
+      : input.scanMode === TAGWRITER_DEMO_SCAN_MODE
+        ? TAGWRITER_DEMO_SCAN_MODE
+        : 'NATIVE_RAW';
+    const tagWriterDemoScan = scanMode === TAGWRITER_DEMO_SCAN_MODE;
+    const mirrored = tagWriterDemoScan ? null : parseMirroredValue(input.uc);
     const cardToken = assertCardToken(input.cardToken);
-    const scanMode = input.scanMode === 'PWA_NDEF' ? 'PWA_NDEF' : 'NATIVE_RAW';
     const originalitySignature = scanMode === 'NATIVE_RAW'
       ? assertOriginalitySignature(input.originalitySignature)
       : null;
@@ -204,6 +213,7 @@ function createNfcTapService(
         input.deviceSignature
       );
       const binding = challenge.binding;
+      const tagWriterDemoBinding = isTagWriterDemoBinding(binding);
       if (
         binding.publicId !== input.publicId
         || binding.status !== 'ACTIVE'
@@ -218,7 +228,11 @@ function createNfcTapService(
       }
       if (
         !digestMatches(cardToken, binding.credential.tokenHash)
-        || uidDigest(mirrored.uid, settings.uidPepper) !== binding.uidHash
+        || tagWriterDemoScan !== tagWriterDemoBinding
+        || (
+          !tagWriterDemoScan
+          && uidDigest(mirrored.uid, settings.uidPepper) !== binding.uidHash
+        )
         || (
           scanMode === 'NATIVE_RAW'
           && !digestMatches(originalitySignature, binding.originalitySignatureHash)
@@ -230,21 +244,23 @@ function createNfcTapService(
           'Scanned NTAG215 identity does not match the enrolled card'
         );
       }
-      const claimed = await transaction.nfcCredentialBinding.updateMany({
-        where: {
-          id: binding.id,
-          organizationId,
-          status: 'ACTIVE',
-          lastCounter: { lt: mirrored.counter },
-        },
-        data: { lastCounter: mirrored.counter },
-      });
-      if (claimed.count !== 1) {
-        throw new DomainError(
-          409,
-          'NFC_COUNTER_REPLAYED',
-          'This NTAG215 counter was already accepted or moved backwards'
-        );
+      if (!tagWriterDemoScan) {
+        const claimed = await transaction.nfcCredentialBinding.updateMany({
+          where: {
+            id: binding.id,
+            organizationId,
+            status: 'ACTIVE',
+            lastCounter: { lt: mirrored.counter },
+          },
+          data: { lastCounter: mirrored.counter },
+        });
+        if (claimed.count !== 1) {
+          throw new DomainError(
+            409,
+            'NFC_COUNTER_REPLAYED',
+            'This NTAG215 counter was already accepted or moved backwards'
+          );
+        }
       }
       const consumedAt = now();
       const consumed = await transaction.nfcScanChallenge.updateMany({
@@ -263,7 +279,9 @@ function createNfcTapService(
             purpose: context.purpose,
             outcome: scanMode === 'NATIVE_RAW'
               ? 'NTAG215_ATTESTED_RESOLVED'
-              : 'NTAG215_PWA_NDEF_RESOLVED',
+              : tagWriterDemoScan
+                ? 'TAGWRITER_DEMO_NDEF_RESOLVED'
+                : 'NTAG215_PWA_NDEF_RESOLVED',
             deviceId: challenge.deviceId,
           },
         }),
@@ -284,10 +302,12 @@ function createNfcTapService(
             {
               childId: binding.credential.childId,
               deviceId: challenge.deviceId,
-              counter: mirrored.counter,
+              counter: mirrored?.counter ?? null,
               assurance: scanMode === 'NATIVE_RAW'
                 ? 'DEVICE_ATTESTED_ORIGINALITY_BOUND'
-                : 'AUTHENTICATED_PWA_NDEF',
+                : tagWriterDemoScan
+                  ? 'AUTHENTICATED_STATIC_NDEF_DEMO'
+                  : 'AUTHENTICATED_PWA_NDEF',
             }
           ),
         }),
@@ -304,10 +324,17 @@ function createNfcTapService(
       return {
         assurance: scanMode === 'NATIVE_RAW'
           ? 'DEVICE_ATTESTED_ORIGINALITY_BOUND'
-          : 'AUTHENTICATED_PWA_NDEF',
-        limitations: scanMode === 'PWA_NDEF'
-          ? ['Browser NFC cannot execute NTAG215 READ_SIG or password commands']
-          : [],
+          : tagWriterDemoScan
+            ? 'AUTHENTICATED_STATIC_NDEF_DEMO'
+            : 'AUTHENTICATED_PWA_NDEF',
+        limitations: tagWriterDemoScan
+          ? [
+            'TagWriter demo links can be copied and do not prove possession of the original card',
+            'Use the approved raw-NFC provisioning flow before production issuance',
+          ]
+          : scanMode === 'PWA_NDEF'
+            ? ['Browser NFC cannot execute NTAG215 READ_SIG or password commands']
+            : [],
         credential: {
           id: binding.credential.id,
           kind: binding.credential.kind,
