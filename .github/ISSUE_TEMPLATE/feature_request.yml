@@ -1,0 +1,48 @@
+name: Feature request
+description: Propose an improvement to the Medfinet backend
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user or operational problem before proposing an implementation. Features involving clinical data, identity, consent, external providers, payments or blockchain custody require explicit safety and privacy analysis.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I have not included real patient data, secrets or partner-confidential information.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who experiences the problem, and in what context?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the desired API or operational behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Security, privacy and clinical safety
+      description: Explain authorization, tenant isolation, data retention, audit and clinical implications.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration impact
+      description: Note API, database, worker, configuration and deployment implications.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence
+      description: Link public standards, research, specifications or related issues where applicable.

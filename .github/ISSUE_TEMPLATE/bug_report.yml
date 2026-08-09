@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem in the Medfinet backend
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Do not include real patient data, credentials, private keys or vulnerability details. Security issues must follow SECURITY.md.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I used synthetic or de-identified data and sandbox credentials only.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and expected behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Configure ...
+        2. Send request ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: endpoint
+    attributes:
+      label: Endpoint, worker or integration
+  - type: input
+    id: version
+    attributes:
+      label: Commit, branch or deployment
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Node.js, database and relevant provider/sandbox versions without secrets.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or responses
+      description: Remove tokens, private addresses, personal data and confidential partner details.
+      render: shell
