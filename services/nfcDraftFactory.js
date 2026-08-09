@@ -22,6 +22,10 @@ async function persistNfcDraft({
   material,
   expiresAt,
   replacesCredentialId,
+  hardwareFamily = 'NTAG_215',
+  bindingStatus = 'PENDING',
+  activatedAt,
+  activatedBySubjectId,
 }) {
   const credential = await transaction.childCredential.create({
     data: {
@@ -39,8 +43,12 @@ async function persistNfcDraft({
       organizationId: context.organizationId,
       credentialId: credential.id,
       publicId: material.publicId,
+      hardwareFamily,
+      status: bindingStatus,
       personalizationNonceHash: tokenDigest(material.personalizationToken),
       provisioningExpiresAt: material.provisioningExpiresAt,
+      ...(activatedAt ? { activatedAt } : {}),
+      ...(activatedBySubjectId ? { activatedBySubjectId } : {}),
     },
   });
   await transaction.nfcPublicRoute.create({

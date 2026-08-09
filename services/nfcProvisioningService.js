@@ -103,15 +103,10 @@ function createNfcProvisioningService(
         childId,
         material,
         expiresAt,
-      });
-      const activated = await transaction.nfcCredentialBinding.update({
-        where: { id: binding.id },
-        data: {
-          hardwareFamily: TAGWRITER_DEMO_HARDWARE_FAMILY,
-          status: 'ACTIVE',
-          activatedAt: createdAt,
-          activatedBySubjectId: context.actorSubjectId,
-        },
+        hardwareFamily: TAGWRITER_DEMO_HARDWARE_FAMILY,
+        bindingStatus: 'ACTIVE',
+        activatedAt: createdAt,
+        activatedBySubjectId: context.actorSubjectId,
       });
       await transaction.auditEvent.create({
         data: audit(
@@ -136,7 +131,7 @@ function createNfcProvisioningService(
           status: credential.status,
           createdAt: credential.createdAt,
         },
-        binding: safeBinding(activated),
+        binding: safeBinding(binding),
         tagWriterUrl: buildTagWriterDemoUrl(
           settings.tapBaseUrl,
           material.publicId,
