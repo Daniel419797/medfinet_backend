@@ -3,10 +3,12 @@ const {
   createClinicalLifecycleService,
 } = require('../services/clinicalLifecycleService');
 const { createCredentialService } = require('../services/credentialService');
+const { createCertificateService } = require('../services/certificateService');
 
 const service = createClinicalService();
 const lifecycleService = createClinicalLifecycleService();
 const credentialService = createCredentialService();
+const certificateService = createCertificateService();
 const context = (req) => ({
   organizationId: req.organization.id,
   actorSubjectId: req.actorSubjectId,
@@ -19,6 +21,26 @@ const handle = (operation, status = 200) => async (req, res, next) => {
   try { return res.status(status).json({ success: true, data: await operation(req) }); }
   catch (error) { return next(error); }
 };
+
+async function downloadImmunizationCertificate(req, res, next) {
+  try {
+    const certificate = await certificateService.create(
+      context(req),
+      req.params.id,
+      req.params.immunizationId,
+    );
+    res.set({
+      'Cache-Control': 'private, no-store, max-age=0',
+      'Content-Disposition': `attachment; filename="${certificate.filename}"`,
+      'Content-Length': String(certificate.buffer.length),
+      'Content-Type': 'image/png',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.status(200).send(certificate.buffer);
+  } catch (error) {
+    return next(error);
+  }
+}
 
 module.exports = {
   issueCredential: handle((req) => credentialService.issue(context(req), req.params.id, req.body), 201),
@@ -70,4 +92,5 @@ module.exports = {
   scheduleAppointment: handle((req) => service.scheduleAppointment(context(req), req.params.id, req.body), 201),
   updateAppointmentStatus: handle((req) => service.updateAppointmentStatus(context(req), req.params.appointmentId, req.body)),
   getTimeline: handle((req) => service.getClinicalTimeline(context(req), req.params.id)),
+  downloadImmunizationCertificate,
 };

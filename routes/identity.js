@@ -101,6 +101,13 @@ const clinicalTimelineDisclosure = createConsentAccessMiddleware({
     { category: 'APPOINTMENTS', access: 'READ' },
   ],
 });
+const immunizationCertificateDisclosure = createConsentAccessMiddleware({
+  scopes: [
+    { category: 'IDENTITY', access: 'READ' },
+    { category: 'DEMOGRAPHICS', access: 'READ' },
+    { category: 'IMMUNIZATION', access: 'READ' },
+  ],
+});
 const climateProfileWriteDisclosure = createConsentAccessMiddleware({
   scopes: [{ category: 'CLIMATE', access: 'WRITE' }],
 });
@@ -423,6 +430,14 @@ router.get(
   caregiverChildAccess,
   clinicalTimelineDisclosure,
   clinicalController.getTimeline
+);
+router.get(
+  '/children/:id/immunizations/:immunizationId/certificate',
+  auth,
+  clinicalReadAccess,
+  caregiverChildAccess,
+  immunizationCertificateDisclosure,
+  clinicalController.downloadImmunizationCertificate,
 );
 router.post(
   '/children/:id/ai/timeline-summary',
