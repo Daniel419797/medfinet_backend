@@ -28,7 +28,7 @@ const settings = {
 };
 
 test('issues an active TagWriter demo URL without child data in the payload', async () => {
-  let activation;
+  let insertedBinding;
   const transaction = {
     async $executeRawUnsafe() {},
     child: { async findFirst() { return { id: 'child-1' }; } },
@@ -45,10 +45,7 @@ test('issues an active TagWriter demo URL without child data in the payload', as
     },
     nfcCredentialBinding: {
       async create({ data }) {
-        return { id: 'binding-1', status: 'PENDING', ...data };
-      },
-      async update({ data }) {
-        activation = data;
+        insertedBinding = data;
         return {
           id: 'binding-1',
           publicId: 'abcdefghijklmnopqrstuvwx',
@@ -82,8 +79,9 @@ test('issues an active TagWriter demo URL without child data in the payload', as
   assert.match(url.pathname, /^\/nfc\/tap\/[A-Za-z0-9_-]{24}$/);
   assert.match(new URLSearchParams(url.hash.slice(1)).get('t'), /^[A-Za-z0-9_-]{43}$/);
   assert.equal(result.tagWriterUrl.includes('child-1'), false);
-  assert.equal(activation.hardwareFamily, TAGWRITER_DEMO_HARDWARE_FAMILY);
-  assert.equal(activation.status, 'ACTIVE');
+  assert.equal(insertedBinding.hardwareFamily, TAGWRITER_DEMO_HARDWARE_FAMILY);
+  assert.equal(insertedBinding.status, 'ACTIVE');
+  assert.equal(insertedBinding.activatedBySubjectId, 'admin-1');
 });
 
 test('recognizes a TagWriter demo URL without requiring a UID mirror', async () => {

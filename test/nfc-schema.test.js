@@ -47,3 +47,21 @@ test('requires explicit administrator approval for raw NFC provisioning stations
   assert.match(capabilityMigration, /nfc_provisioning_approval_check/);
   assert.match(capabilityMigration, /nfcProvisioningApprovedBySubjectId/);
 });
+
+test('allows explicitly labeled static TagWriter demo bindings', () => {
+  const tagWriterMigration = fs.readFileSync(
+    path.join(
+      __dirname,
+      '..',
+      'prisma',
+      'migrations',
+      '20260810000000_allow_tagwriter_demo_nfc',
+      'migration.sql'
+    ),
+    'utf8'
+  );
+  assert.match(tagWriterMigration, /NTAG_215_TAGWRITER_DEMO/);
+  assert.match(tagWriterMigration, /"lastCounter" = -1/);
+  assert.match(tagWriterMigration, /"writeProtectedAt" IS NULL/);
+  assert.match(tagWriterMigration, /"status" IN \('ACTIVE', 'SUSPENDED'\)/);
+});
