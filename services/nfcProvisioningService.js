@@ -22,6 +22,10 @@ const {
   verifyPersonalizationToken,
 } = require('./nfcValidation');
 const { safeBinding } = require('./nfcBindingView');
+const {
+  TAGWRITER_DEMO_HARDWARE_FAMILY,
+  buildTagWriterDemoUrl,
+} = require('./nfcTagWriter');
 
 function createNfcProvisioningService(
   prismaClient,
@@ -72,6 +76,77 @@ function createNfcProvisioningService(
         personalizationToken: material.personalizationToken,
         cardToken: material.cardToken,
         manifest: material.manifest,
+      };
+    });
+  }
+
+  async function createTagWriterDemo(context, childId, input = {}) {
+    const createdAt = now();
+    const material = createDraftMaterial(settings, createdAt);
+    const expiresAt = input.expiresAt
+      ? timestamp(input.expiresAt, 'expiresAt')
+      : null;
+    return withTenantTransaction(database, context.organizationId, async (transaction) => {
+      const child = await transaction.child.findFirst({
+        where: {
+          id: childId,
+          organizationId: context.organizationId,
+          status: 'ACTIVE',
+        },
+        select: { id: true },
+      });
+      if (!child) throw new DomainError(404, 'CHILD_NOT_FOUND', 'Active child not found');
+
+      const { credential, binding } = await persistNfcDraft({
+        transaction,
+        context,
+        childId,
+        material,
+        expiresAt,
+      });
+      const activated = await transaction.nfcCredentialBinding.update({
+        where: { id: binding.id },
+        data: {
+          hardwareFamily: TAGWRITER_DEMO_HARDWARE_FAMILY,
+          status: 'ACTIVE',
+          activatedAt: createdAt,
+          activatedBySubjectId: context.actorSubjectId,
+        },
+      });
+      await transaction.auditEvent.create({
+        data: audit(
+          context,
+          'nfc.tagwriter-demo-activated',
+          'nfc-binding',
+          binding.id,
+          {
+            childId,
+            credentialId: credential.id,
+            assurance: 'AUTHENTICATED_STATIC_NDEF_DEMO',
+            limitation: 'Static NDEF links can be copied and do not prove possession of the original card',
+          }
+        ),
+      });
+
+      return {
+        credential: {
+          id: credential.id,
+          childId: credential.childId,
+          kind: credential.kind,
+          status: credential.status,
+          createdAt: credential.createdAt,
+        },
+        binding: safeBinding(activated),
+        tagWriterUrl: buildTagWriterDemoUrl(
+          settings.tapBaseUrl,
+          material.publicId,
+          material.cardToken
+        ),
+        assurance: 'AUTHENTICATED_STATIC_NDEF_DEMO',
+        limitations: [
+          'For demonstrations only; the static NDEF link can be copied',
+          'Child and clinical data remain server-side and require an authorized Medfinet login',
+        ],
       };
     });
   }
@@ -346,7 +421,7 @@ function createNfcProvisioningService(
     });
   }
 
-  return { createDraft, prepare, revoke, replace };
+  return { createDraft, createTagWriterDemo, prepare, revoke, replace };
 }
 
 module.exports = {

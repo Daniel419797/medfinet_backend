@@ -1,17 +1,24 @@
 const crypto = require('node:crypto');
 const { DomainError } = require('../utils/domainError');
+const { TAGWRITER_DEMO_SCAN_MODE } = require('./nfcTagWriter');
 
 function scannerPayload(kind, values) {
   return Buffer.from([kind, ...values].join('\n'), 'utf8');
 }
 
 function scanAttestationPayload(input) {
-  const scanMode = input.scanMode === 'PWA_NDEF' ? 'PWA_NDEF' : 'NATIVE_RAW';
+  const scanMode = input.scanMode === 'PWA_NDEF'
+    ? 'PWA_NDEF'
+    : input.scanMode === TAGWRITER_DEMO_SCAN_MODE
+      ? TAGWRITER_DEMO_SCAN_MODE
+      : 'NATIVE_RAW';
   return scannerPayload('MEDFINET_NTAG215_SCAN_V2', [
     input.challengeToken,
     input.publicId,
     input.cardToken,
-    input.uc,
+    scanMode === TAGWRITER_DEMO_SCAN_MODE
+      ? 'NO_UID_COUNTER_MIRROR'
+      : input.uc,
     scanMode,
     scanMode === 'NATIVE_RAW'
       ? input.originalitySignature.toUpperCase()
