@@ -15,6 +15,8 @@ const EVENT_TYPES = Object.freeze({
   NFC_ACTIVATE:        { code: 0x06, category: 'nfc' },
   NFC_REVOKE:          { code: 0x07, category: 'nfc' },
   NFC_REPLACE:         { code: 0x08, category: 'nfc' },
+  IMMUNIZATION_RECORD: { code: 0x09, category: 'clinical' },
+  IMMUNIZATION_AMEND:  { code: 0x0A, category: 'clinical' },
 });
 
 const EVENT_BY_CODE = Object.values(EVENT_TYPES).reduce((map, entry) => {
@@ -23,7 +25,7 @@ const EVENT_BY_CODE = Object.values(EVENT_TYPES).reduce((map, entry) => {
 }, {});
 
 function isValidEventCode(code) {
-  return code >= 0x01 && code <= 0x08;
+  return Number.isInteger(code) && Boolean(EVENT_BY_CODE[code]);
 }
 
 function buildNote(eventCode, tenantId, anchorId) {

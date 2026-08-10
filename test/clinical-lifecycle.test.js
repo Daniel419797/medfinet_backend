@@ -15,6 +15,7 @@ function databaseWithTransaction(transaction) {
 const context = {
   organizationId: 'org-1',
   actorSubjectId: 'worker-1',
+  role: 'HEALTH_WORKER',
   purpose: 'clinical-care',
 };
 
@@ -87,8 +88,10 @@ test('resolves an active alert exactly once with audit evidence', async () => {
 
 test('amends immunization while preserving immutable before-and-after evidence', async () => {
   let amendment;
+  let anchor;
   const existing = {
     id: 'immunization-1',
+    childId: 'child-1',
     vaccineCode: 'OPV',
     doseNumber: 1,
     administeredAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -110,9 +113,15 @@ test('amends immunization while preserving immutable before-and-after evidence',
     clinicalAmendment: {
       async create({ data }) {
         amendment = data;
+        return { id: 'amendment-1', ...data };
       },
     },
     auditEvent: { async create() {} },
+    outboxEvent: {
+      async create({ data }) {
+        anchor = data;
+      },
+    },
   };
 
   const record = await createClinicalLifecycleService(
@@ -125,4 +134,47 @@ test('amends immunization while preserving immutable before-and-after evidence',
   assert.equal(record.status, 'AMENDED');
   assert.equal(amendment.previousData.lotNumber, 'LOT-OLD');
   assert.equal(amendment.replacementData.lotNumber, 'LOT-NEW');
+  assert.equal(anchor.payload.eventCode, 0x0A);
+  assert.match(anchor.payload.anchorId, /^immunization-amended:amendment-1:[a-f0-9]{64}$/);
+  assert.doesNotMatch(anchor.payload.anchorId, /LOT-OLD|LOT-NEW|child-1/);
+});
+
+test('rejects an amendment that would duplicate another vaccine dose', async () => {
+  let lookup = 0;
+  let updated = false;
+  const tx = {
+    async $executeRawUnsafe() {},
+    immunizationRecord: {
+      async findFirst() {
+        lookup += 1;
+        return lookup === 1
+          ? {
+              id: 'immunization-1',
+              childId: 'child-1',
+              vaccineCode: 'OPV',
+              doseNumber: 1,
+              administeredAt: new Date('2026-01-01T00:00:00.000Z'),
+              lotNumber: null,
+              route: 'ORAL',
+              site: null,
+              notes: null,
+            }
+          : { id: 'immunization-2' };
+      },
+      async update() {
+        updated = true;
+      },
+    },
+  };
+
+  await assert.rejects(
+    createClinicalLifecycleService(
+      databaseWithTransaction(tx)
+    ).amendImmunization(context, 'immunization-1', {
+      reason: 'Correct dose sequence',
+      doseNumber: 2,
+    }),
+    (error) => error.code === 'IMMUNIZATION_ALREADY_RECORDED' && error.status === 409
+  );
+  assert.equal(updated, false);
 });

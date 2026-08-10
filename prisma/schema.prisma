@@ -628,6 +628,7 @@ model ImmunizationRecord {
   site                   String?
   notes                  String?
   sourceOperationId      String?
+  deduplicationKey       String?
   administeringSubjectId String
   status                 ClinicalRecordStatus @default(ACTIVE)
   createdAt              DateTime             @default(now()) @db.Timestamptz(3)
@@ -640,6 +641,7 @@ model ImmunizationRecord {
   amendments   ClinicalAmendment[]
 
   @@unique([organizationId, sourceOperationId])
+  @@unique([organizationId, deduplicationKey])
   @@unique([id, organizationId])
   @@index([organizationId, childId, administeredAt])
   @@map("immunization_records")

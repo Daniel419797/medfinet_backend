@@ -1,6 +1,9 @@
 const { DomainError } = require('../utils/domainError');
 const { withTenantTransaction } = require('./tenantContext');
 const { audit } = require('./clinicalValidation');
+const {
+  withoutImmunizationIntegrityFields,
+} = require('./immunizationIntegrity');
 
 function createClinicalTimelineService(prismaClient) {
   const database = prismaClient || require('../utils/prisma').prisma;
@@ -49,7 +52,13 @@ function createClinicalTimelineService(prismaClient) {
       await transaction.auditEvent.create({
         data: audit(context, 'clinical-timeline.read', 'child', childId),
       });
-      return { immunizations, growth, alerts, allergies, appointments };
+      return {
+        immunizations: immunizations.map(withoutImmunizationIntegrityFields),
+        growth,
+        alerts,
+        allergies,
+        appointments,
+      };
     });
   }
 

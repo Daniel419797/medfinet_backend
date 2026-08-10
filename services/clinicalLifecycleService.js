@@ -5,6 +5,15 @@ function jsonEvidence(value) {
   return JSON.parse(JSON.stringify(value));
 }
 const { requiredText } = require('./identityService');
+const { EVENT_TYPES } = require('./blockchain/eventTypes');
+const { assertClinicalWriteAccess } = require('./clinicalAccessPolicy');
+const {
+  amendedImmunizationAnchorId,
+  duplicateImmunizationError,
+  immunizationDeduplicationKey,
+  isDeduplicationConstraintError,
+  withoutImmunizationIntegrityFields,
+} = require('./immunizationIntegrity');
 const {
   ALERT_SEVERITIES,
   boundedInteger,
@@ -194,80 +203,135 @@ function createClinicalLifecycleService(prismaClient) {
   }
 
   async function amendImmunization(context, recordId, input) {
+    assertClinicalWriteAccess(context);
     const reason = requiredText(input.reason, 'reason', 1000);
-    return withTenantTransaction(database, context.organizationId, async (transaction) => {
-      const existing = await transaction.immunizationRecord.findFirst({
-        where: {
-          id: recordId,
-          organizationId: context.organizationId,
-          status: { in: ['ACTIVE', 'AMENDED'] },
-        },
-      });
-      if (!existing) {
-        throw new DomainError(
-          404,
-          'IMMUNIZATION_NOT_AMENDABLE',
-          'Active immunization record not found'
-        );
-      }
-      const replacement = {
-        vaccineCode: input.vaccineCode === undefined
-          ? existing.vaccineCode
-          : requiredText(input.vaccineCode, 'vaccineCode', 60).toUpperCase(),
-        doseNumber: input.doseNumber === undefined
-          ? existing.doseNumber
-          : boundedInteger(input.doseNumber, 'doseNumber', { max: 20 }),
-        administeredAt: input.administeredAt === undefined
-          ? existing.administeredAt
-          : timestamp(input.administeredAt, 'administeredAt', { future: false }),
-        lotNumber: input.lotNumber === undefined
-          ? existing.lotNumber
-          : optionalText(input.lotNumber, 'lotNumber', 100),
-        route: input.route === undefined
-          ? existing.route
-          : optionalText(input.route, 'route', 80),
-        site: input.site === undefined
-          ? existing.site
-          : optionalText(input.site, 'site', 80),
-        notes: input.notes === undefined
-          ? existing.notes
-          : optionalText(input.notes, 'notes', 1000),
-      };
-      const record = await transaction.immunizationRecord.update({
-        where: { id: existing.id },
-        data: { ...replacement, status: 'AMENDED' },
-      });
-      await Promise.all([
-        transaction.clinicalAmendment.create({
+    try {
+      return await withTenantTransaction(database, context.organizationId, async (transaction) => {
+        const existing = await transaction.immunizationRecord.findFirst({
+          where: {
+            id: recordId,
+            organizationId: context.organizationId,
+            status: { in: ['ACTIVE', 'AMENDED'] },
+          },
+        });
+        if (!existing) {
+          throw new DomainError(
+            404,
+            'IMMUNIZATION_NOT_AMENDABLE',
+            'Active immunization record not found'
+          );
+        }
+        const replacement = {
+          vaccineCode: input.vaccineCode === undefined
+            ? existing.vaccineCode
+            : requiredText(input.vaccineCode, 'vaccineCode', 60).toUpperCase(),
+          doseNumber: input.doseNumber === undefined
+            ? existing.doseNumber
+            : boundedInteger(input.doseNumber, 'doseNumber', { max: 20 }),
+          administeredAt: input.administeredAt === undefined
+            ? existing.administeredAt
+            : timestamp(input.administeredAt, 'administeredAt', { future: false }),
+          lotNumber: input.lotNumber === undefined
+            ? existing.lotNumber
+            : optionalText(input.lotNumber, 'lotNumber', 100),
+          route: input.route === undefined
+            ? existing.route
+            : optionalText(input.route, 'route', 80),
+          site: input.site === undefined
+            ? existing.site
+            : optionalText(input.site, 'site', 80),
+          notes: input.notes === undefined
+            ? existing.notes
+            : optionalText(input.notes, 'notes', 1000),
+        };
+        const identityChanged = replacement.vaccineCode !== existing.vaccineCode
+          || replacement.doseNumber !== existing.doseNumber;
+        if (identityChanged) {
+          const duplicate = await transaction.immunizationRecord.findFirst({
+            where: {
+              id: { not: existing.id },
+              organizationId: context.organizationId,
+              childId: existing.childId,
+              vaccineCode: replacement.vaccineCode,
+              doseNumber: replacement.doseNumber,
+              status: { in: ['ACTIVE', 'AMENDED'] },
+            },
+            select: { id: true },
+          });
+          if (duplicate) throw duplicateImmunizationError(duplicate.id);
+        }
+        const record = await transaction.immunizationRecord.update({
+          where: { id: existing.id },
+          data: {
+            ...replacement,
+            deduplicationKey: immunizationDeduplicationKey(
+              existing.childId,
+              replacement.vaccineCode,
+              replacement.doseNumber
+            ),
+            status: 'AMENDED',
+          },
+        });
+        const previousData = jsonEvidence({
+          vaccineCode: existing.vaccineCode,
+          doseNumber: existing.doseNumber,
+          administeredAt: existing.administeredAt,
+          lotNumber: existing.lotNumber,
+          route: existing.route,
+          site: existing.site,
+          notes: existing.notes,
+        });
+        const replacementData = jsonEvidence(replacement);
+        const amendment = await transaction.clinicalAmendment.create({
           data: {
             organizationId: context.organizationId,
             immunizationId: existing.id,
             reason,
-            previousData: jsonEvidence({
-              vaccineCode: existing.vaccineCode,
-              doseNumber: existing.doseNumber,
-              administeredAt: existing.administeredAt,
-              lotNumber: existing.lotNumber,
-              route: existing.route,
-              site: existing.site,
-              notes: existing.notes,
-            }),
-            replacementData: jsonEvidence(replacement),
+            previousData,
+            replacementData,
             amendedBySubjectId: context.actorSubjectId,
           },
-        }),
-        transaction.auditEvent.create({
-          data: audit(
-            context,
-            'immunization.amended',
-            'immunization',
-            existing.id,
-            { reason }
-          ),
-        }),
-      ]);
-      return record;
-    });
+        });
+        const anchor = EVENT_TYPES.IMMUNIZATION_AMEND;
+        await Promise.all([
+          transaction.auditEvent.create({
+            data: audit(
+              context,
+              'immunization.amended',
+              'immunization',
+              existing.id,
+              { reason }
+            ),
+          }),
+          transaction.outboxEvent.create({
+            data: {
+              organizationId: context.organizationId,
+              eventType: 'BLOCKCHAIN_ANCHOR_REQUESTED',
+              aggregateType: 'blockchain-anchor',
+              aggregateId: amendment.id,
+              idempotencyKey: `blockchain:${anchor.code}:${amendment.id}`,
+              payload: {
+                eventCode: anchor.code,
+                anchorId: amendedImmunizationAnchorId({
+                  amendmentId: amendment.id,
+                  recordId: existing.id,
+                  previous: previousData,
+                  replacement: replacementData,
+                  reason,
+                }),
+                tenantId: context.organizationId,
+              },
+            },
+          }),
+        ]);
+        return withoutImmunizationIntegrityFields(record);
+      });
+    } catch (error) {
+      if (isDeduplicationConstraintError(error)) {
+        throw duplicateImmunizationError();
+      }
+      throw error;
+    }
   }
 
   async function amendGrowth(context, recordId, input) {

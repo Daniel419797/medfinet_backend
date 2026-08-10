@@ -16,6 +16,7 @@ function context(organizationId = 'org-1') {
   return {
     organizationId,
     actorSubjectId: 'worker-1',
+    role: 'HEALTH_WORKER',
     purpose: 'continuity-of-care',
   };
 }
@@ -27,6 +28,111 @@ function tenantTransaction(overrides = {}) {
     ...overrides,
   };
 }
+
+test('records one vaccine dose with worker attribution, deduplication, audit, and hash-only anchoring', async () => {
+  const calls = [];
+  const transaction = tenantTransaction({
+    child: {
+      async findFirst() {
+        return { id: 'child-1', medfinetId: 'MED-1' };
+      },
+    },
+    immunizationRecord: {
+      async findUnique() {
+        return null;
+      },
+      async findFirst() {
+        return null;
+      },
+      async create({ data }) {
+        calls.push(['immunization', data]);
+        return { id: 'immunization-1', status: 'ACTIVE', ...data };
+      },
+    },
+    auditEvent: {
+      async create({ data }) {
+        calls.push(['audit', data]);
+      },
+    },
+    outboxEvent: {
+      async create({ data }) {
+        calls.push(['outbox', data]);
+      },
+    },
+  });
+  const service = createClinicalService(databaseWithTransaction(transaction));
+
+  const record = await service.recordImmunization(context(), 'child-1', {
+    vaccineCode: ' bcg ',
+    doseNumber: 1,
+    administeredAt: '2026-01-01T10:00:00.000Z',
+    lotNumber: 'LOT-1',
+    sourceOperationId: 'operation-1',
+  });
+
+  assert.equal(record.vaccineCode, 'BCG');
+  assert.equal(record.administeringSubjectId, 'worker-1');
+  assert.equal(record.deduplicationKey, undefined);
+  assert.match(
+    calls.find(([kind]) => kind === 'immunization')[1].deduplicationKey,
+    /^[a-f0-9]{64}$/
+  );
+  assert.equal(calls.find(([kind]) => kind === 'audit')[1].action, 'immunization.recorded');
+  const anchor = calls.find(([kind]) => kind === 'outbox')[1];
+  assert.equal(anchor.eventType, 'BLOCKCHAIN_ANCHOR_REQUESTED');
+  assert.equal(anchor.payload.eventCode, 0x09);
+  assert.match(anchor.payload.anchorId, /^immunization-recorded:immunization-1:[a-f0-9]{64}$/);
+  assert.doesNotMatch(anchor.payload.anchorId, /BCG|LOT-1|child-1/);
+});
+
+test('rejects a duplicate vaccine and dose for the same child', async () => {
+  const transaction = tenantTransaction({
+    child: {
+      async findFirst() {
+        return { id: 'child-1' };
+      },
+    },
+    immunizationRecord: {
+      async findFirst() {
+        return { id: 'immunization-existing' };
+      },
+    },
+  });
+  const service = createClinicalService(databaseWithTransaction(transaction));
+
+  await assert.rejects(
+    service.recordImmunization(context(), 'child-1', {
+      vaccineCode: 'BCG',
+      doseNumber: 1,
+      administeredAt: '2026-01-01T10:00:00.000Z',
+    }),
+    (error) => error.code === 'IMMUNIZATION_ALREADY_RECORDED' && error.status === 409
+  );
+});
+
+test('rejects immunization writes from a non-clinical role before database access', async () => {
+  let transactionStarted = false;
+  const database = {
+    async $transaction() {
+      transactionStarted = true;
+    },
+  };
+  const service = createClinicalService(database);
+
+  await assert.rejects(
+    service.recordImmunization(
+      { ...context(), role: 'NUTRITION_WORKER' },
+      'child-1',
+      {
+        vaccineCode: 'BCG',
+        doseNumber: 1,
+        administeredAt: '2026-01-01T10:00:00.000Z',
+      }
+    ),
+    (error) => error.code === 'CLINICAL_WRITE_ACCESS_DENIED' && error.status === 403
+  );
+  assert.equal(transactionStarted, false);
+});
 
 test('replaces an active credential without changing the child identity', async () => {
   const calls = [];
