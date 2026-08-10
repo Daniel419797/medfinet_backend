@@ -252,13 +252,11 @@ function algorandConfig(nodeEnv) {
   }
   const allowedRaw = optionalString('ALGORAND_ALLOWED_NETWORKS') || 'testnet,mainnet';
   const requestedNetworks = allowedRaw.split(',').map((value) => value.trim()).filter(Boolean);
-  const allowedNetworks = [...new Set(requestedNetworks.map(normalizeNetwork))];
-  if (
-    allowedNetworks.length === 0
-    || allowedNetworks.length !== requestedNetworks.length
-  ) {
+  const normalizedNetworks = requestedNetworks.map(normalizeNetwork);
+  if (normalizedNetworks.length === 0 || normalizedNetworks.some((network) => !network)) {
     throw new Error('ALGORAND_ALLOWED_NETWORKS may contain only testnet and mainnet');
   }
+  const allowedNetworks = [...new Set(normalizedNetworks)];
   const selectedDefault = allowedNetworks.includes(defaultNetwork)
     ? defaultNetwork
     : allowedNetworks[0];
@@ -266,6 +264,11 @@ function algorandConfig(nodeEnv) {
   let platformWalletMnemonic = null;
   let confirmationRounds = 4;
   let fee = 1_000;
+  const requestTimeoutMs = optionalInteger(
+    'ALGORAND_REQUEST_TIMEOUT_MS',
+    10_000,
+    { min: 1_000, max: 60_000 }
+  );
   if (enabled) {
     platformWalletMnemonic = requireString('ALGORAND_PLATFORM_WALLET_MNEMONIC');
     if (platformWalletMnemonic.split(/\s+/).length !== 25) {
@@ -299,7 +302,10 @@ function algorandConfig(nodeEnv) {
       if (
         enabled
         && nodeEnv === 'production'
-        && (algodServer.startsWith('http://') || explorerTransactionUrl.startsWith('http://'))
+        && (
+          new URL(algodServer).protocol !== 'https:'
+          || new URL(explorerTransactionUrl).protocol !== 'https:'
+        )
       ) {
         throw new Error(`${prefix} service URLs must use HTTPS in production`);
       }
@@ -330,6 +336,7 @@ function algorandConfig(nodeEnv) {
     platformWalletMnemonic,
     confirmationRounds,
     fee,
+    requestTimeoutMs,
     // Preserve the original single-network interface for legacy read-only callers.
     algodServer: defaultSettings.algodServer,
     algodPort: defaultSettings.algodPort,

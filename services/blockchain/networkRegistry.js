@@ -6,6 +6,23 @@ const NETWORKS = Object.freeze({
   mainnet: config.algorand.networks.mainnet,
 });
 
+const NETWORK_SETTINGS = Object.freeze(Object.fromEntries(
+  Object.entries(NETWORKS).map(([network, definition]) => [network, Object.freeze({
+    enabled: true,
+    network,
+    networkName: definition.label,
+    chainId: definition.chainId,
+    algodServer: definition.algodServer,
+    algodPort: definition.algodPort,
+    algodToken: definition.algodToken,
+    explorerTransactionUrl: definition.explorerTransactionUrl,
+    platformWalletMnemonic: config.algorand.platformWalletMnemonic,
+    confirmationRounds: config.algorand.confirmationRounds,
+    fee: config.algorand.fee,
+    requestTimeoutMs: config.algorand.requestTimeoutMs,
+  })])
+));
+
 function normalizeNetwork(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'testnet' || normalized === 'test') return 'testnet';
@@ -26,12 +43,15 @@ function resolveNetwork(value) {
     throw new DomainError(503, 'ALGORAND_DISABLED', 'Algorand is disabled in this environment');
   }
 
-  const selected = normalizeNetwork(value) || defaultNetwork();
-  if (!configuredNetworks().includes(selected)) {
+  const provided = value !== undefined
+    && value !== null
+    && String(value).trim().length > 0;
+  const selected = provided ? normalizeNetwork(value) : defaultNetwork();
+  if (!selected || !configuredNetworks().includes(selected)) {
     throw new DomainError(
       400,
       'ALGORAND_NETWORK_NOT_ALLOWED',
-      `Algorand network ${selected} is not enabled for this deployment`
+      `Algorand network ${provided ? String(value).trim() : selected} is not enabled for this deployment`
     );
   }
   return selected;
@@ -39,29 +59,20 @@ function resolveNetwork(value) {
 
 function getNetworkConfig(value) {
   const network = resolveNetwork(value);
-  const definition = NETWORKS[network];
+  return NETWORK_SETTINGS[network];
+}
 
-  return Object.freeze({
-    enabled: true,
-    network,
-    networkName: definition.label,
-    chainId: definition.chainId,
-    algodServer: definition.algodServer,
-    algodPort: definition.algodPort,
-    algodToken: definition.algodToken,
-    explorerTransactionUrl: definition.explorerTransactionUrl,
-    platformWalletMnemonic: config.algorand.platformWalletMnemonic,
-    confirmationRounds: config.algorand.confirmationRounds,
-    fee: config.algorand.fee,
-  });
+function requestedNetworkFromRequest(req) {
+  return req?.get?.('x-algorand-network')
+    || req?.query?.network
+    || req?.body?.network
+    || null;
 }
 
 function networkFromRequest(req, explicitValue) {
   return resolveNetwork(
     explicitValue
-      || req?.get?.('x-algorand-network')
-      || req?.query?.network
-      || req?.body?.network
+      || requestedNetworkFromRequest(req)
   );
 }
 
@@ -86,6 +97,7 @@ module.exports = {
   defaultNetwork,
   resolveNetwork,
   getNetworkConfig,
+  requestedNetworkFromRequest,
   networkFromRequest,
   listAvailableNetworks,
 };

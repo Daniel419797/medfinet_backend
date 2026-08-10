@@ -14,6 +14,7 @@ function config() {
     platformWalletMnemonic: 'unused-with-injected-account',
     confirmationRounds: 4,
     fee: 1_000,
+    requestTimeoutMs: 50,
   };
 }
 
@@ -46,6 +47,7 @@ test('builds an SDK v3 self-payment and persists the positive confirmed round', 
   assert.equal(paymentInput.amount, 0);
   assert.equal(result.txId, 'TX-1');
   assert.equal(result.blockHeight, 88n);
+  assert.equal(result.network, 'testnet');
 });
 
 test('does not report confirmed when Algorand returns round zero', async () => {
@@ -99,6 +101,7 @@ test('reads exact transaction identity and payment semantics from the SDK respon
   const transaction = await adapter.getTransaction('TX-1');
 
   assert.equal(transaction.txId, 'TX-1');
+  assert.equal(transaction.lookupStatus, 'FOUND');
   assert.equal(transaction.confirmed, true);
   assert.equal(transaction.confirmedRound, 88n);
   assert.equal(transaction.sender, 'PLATFORM-ACCOUNT');
@@ -106,4 +109,47 @@ test('reads exact transaction identity and payment semantics from the SDK respon
   assert.equal(transaction.receiver, 'PLATFORM-ACCOUNT');
   assert.equal(transaction.amount, 0n);
   assert.deepEqual(transaction.note, Buffer.from([0, 1, 9]));
+});
+
+test('reports an unavailable lookup when algod cannot retain or find a transaction', async () => {
+  const notFound = new Error('not found');
+  notFound.status = 404;
+  const client = {
+    pendingTransactionInformation: () => ({
+      do: async () => { throw notFound; },
+    }),
+  };
+  const adapter = new AlgorandAdapter(config(), {
+    sdk: {},
+    client,
+    platformAccount: { addr: 'PLATFORM-ACCOUNT', sk: Buffer.from('secret') },
+  });
+
+  const transaction = await adapter.getTransaction('TX-1');
+
+  assert.deepEqual(transaction, {
+    lookupStatus: 'UNAVAILABLE',
+    unavailableReason: 'TRANSACTION_NOT_RETAINED_OR_NOT_FOUND',
+  });
+});
+
+test('bounds stalled algod transaction lookups', async () => {
+  const client = {
+    pendingTransactionInformation: () => ({
+      do: async () => new Promise(() => {}),
+    }),
+  };
+  const adapter = new AlgorandAdapter(
+    { ...config(), requestTimeoutMs: 10 },
+    {
+      sdk: {},
+      client,
+      platformAccount: { addr: 'PLATFORM-ACCOUNT', sk: Buffer.from('secret') },
+    },
+  );
+
+  await assert.rejects(
+    adapter.getTransaction('TX-1'),
+    (error) => error.code === 'ALGORAND_REQUEST_TIMEOUT',
+  );
 });

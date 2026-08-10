@@ -6,6 +6,7 @@ class AnchorReceipt {
     this.eventCode = fields.eventCode;
     this.eventCategory = fields.eventCategory;
     this.tenantId = fields.tenantId;
+    this.network = fields.network || null;
     this.txId = fields.txId;
     this.blockHeight = fields.blockHeight;
     this.timestamp = fields.timestamp;
@@ -27,6 +28,7 @@ class AnchorReceipt {
       eventCode: this.eventCode,
       eventCategory: this.eventCategory,
       tenantId: this.tenantId,
+      network: this.network,
       txId: this.txId,
       blockHeight: this.blockHeight == null ? null : String(this.blockHeight),
       timestamp: this.timestamp,
@@ -45,6 +47,7 @@ class AnchorReceipt {
       eventCode: this.eventCode,
       eventCategory: this.eventCategory,
       tenantId: this.tenantId,
+      network: this.network,
       txId: this.txId,
       blockHeight: this.blockHeight,
       isoTimestamp: this.timestamp,
@@ -63,6 +66,7 @@ class AnchorReceipt {
       eventCode: row.eventCode,
       eventCategory: row.eventCategory,
       tenantId: row.tenantId,
+      network: row.network,
       txId: row.txId,
       blockHeight: row.blockHeight,
       timestamp: row.isoTimestamp,
@@ -81,6 +85,7 @@ class AnchorReceipt {
       eventCode,
       eventCategory,
       tenantId,
+      network: result.network,
       txId: result.txId,
       blockHeight: result.blockHeight,
       timestamp: result.timestamp,

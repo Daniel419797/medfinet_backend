@@ -249,6 +249,7 @@ test('reports confirmed evidence only after the Algorand note is verified', asyn
         eventCode: 0x09,
         eventCategory: 'clinical',
         tenantId: 'org-1',
+        network: 'testnet',
         txId: 'ALGORAND-TX-1',
         blockHeight: 42n,
         isoTimestamp: '2026-01-10T08:01:00.000Z',
@@ -269,17 +270,27 @@ test('reports confirmed evidence only after the Algorand note is verified', asyn
       algodServer: 'https://testnet-api.algonode.cloud',
     },
     inspectReceipt: async (_receipt, _settings, expected) => {
-      assert.deepEqual(expected, {
-        anchorId: expected.anchorId,
-        eventCode: 0x09,
-        tenantId: 'org-1',
-      });
+      assert.match(
+        expected.anchorId,
+        /^immunization-recorded:v1:imm-1:[a-f0-9]{64}$/,
+      );
+      assert.equal(expected.eventCode, 0x09);
+      assert.equal(expected.tenantId, 'org-1');
+      assert.equal(expected.network, 'testnet');
+      assert.deepEqual(
+        Object.keys(expected).sort(),
+        ['anchorId', 'eventCode', 'network', 'tenantId'],
+      );
       return ({
+      status: 'CONFIRMED',
+      reason: null,
       receiptIntegrity: true,
+      networkIntegrity: true,
       hashIntegrity: true,
       txIdIntegrity: true,
       noteIntegrity: true,
       transactionIntegrity: true,
+      transactionLocated: true,
       chainConfirmed: true,
       verified: true,
       network: 'Algorand TestNet',
@@ -332,11 +343,13 @@ function recoveryTransaction(existing, onUpdateMany) {
 }
 
 test('atomically requeues legacy published evidence when no receipt exists', async () => {
+  const currentTime = new Date('2026-08-10T12:00:00.000Z');
   const existing = {
     id: 'outbox-1',
     organizationId: 'org-1',
     status: 'PUBLISHED',
     attempts: 1,
+    nextAttemptAt: new Date('2026-08-10T11:00:00.000Z'),
   };
   let recovery;
   const transaction = recoveryTransaction(existing, async (input) => {
@@ -346,6 +359,7 @@ test('atomically requeues legacy published evidence when no receipt exists', asy
   const database = { $transaction: async (operation) => operation(transaction) };
   const service = createCertificateService(database, async () => Buffer.alloc(0), {
     algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => currentTime,
   });
 
   const result = await service.evidence(context, 'child-1', 'imm-1');
@@ -357,8 +371,79 @@ test('atomically requeues legacy published evidence when no receipt exists', asy
     organizationId: 'org-1',
     status: 'PUBLISHED',
     attempts: 1,
+    nextAttemptAt: { lte: currentTime },
   });
   assert.equal(recovery.data.status, 'PENDING');
+});
+
+test('does not bypass retry backoff for failed evidence', async () => {
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'FAILED',
+    attempts: 3,
+    nextAttemptAt: new Date('2026-08-10T12:05:00.000Z'),
+  };
+  let updated = false;
+  const transaction = recoveryTransaction(existing, async () => {
+    updated = true;
+    return { count: 1 };
+  });
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => new Date('2026-08-10T12:00:00.000Z'),
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.queued, false);
+  assert.equal(updated, false);
+});
+
+test('does not requeue published evidence before its eligibility time', async () => {
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'PUBLISHED',
+    attempts: 1,
+    nextAttemptAt: new Date('2026-08-10T12:05:00.000Z'),
+  };
+  let updated = false;
+  const transaction = recoveryTransaction(existing, async () => {
+    updated = true;
+    return { count: 1 };
+  });
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => new Date('2026-08-10T12:00:00.000Z'),
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.queued, false);
+  assert.equal(updated, false);
+});
+
+test('reports not queued when optimistic evidence recovery loses the race', async () => {
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'PUBLISHED',
+    attempts: 1,
+    nextAttemptAt: new Date('2026-08-10T11:00:00.000Z'),
+  };
+  const transaction = recoveryTransaction(existing, async () => ({ count: 0 }));
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => new Date('2026-08-10T12:00:00.000Z'),
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.queued, false);
 });
 
 test('never resets evidence while an outbox worker owns the processing lock', async () => {

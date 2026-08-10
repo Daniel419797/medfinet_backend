@@ -1,5 +1,6 @@
 const config = require('../config');
 const { logger } = require('../utils/logger');
+const { DomainError } = require('../utils/domainError');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
 const { inspectAnchorReceipt } = require('../services/blockchain/receiptVerification');
 const { eventCodeForAnchorId } = require('../services/blockchain/eventTypes');
@@ -7,10 +8,21 @@ const {
   defaultNetwork,
   getNetworkConfig,
   networkFromRequest,
+  requestedNetworkFromRequest,
+  resolveNetwork,
   listAvailableNetworks,
 } = require('../services/blockchain/networkRegistry');
 
 const receiptStore = new AnchorReceiptRepository();
+const adapterCache = new Map();
+
+function adapterForNetwork(network) {
+  if (!adapterCache.has(network)) {
+    const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
+    adapterCache.set(network, new AlgorandAdapter(getNetworkConfig(network)));
+  }
+  return adapterCache.get(network);
+}
 
 async function getAnchor(req, res, next) {
   try {
@@ -68,46 +80,71 @@ async function verifyAnchor(req, res, next) {
       blockHeight: receipt.blockHeight == null ? null : String(receipt.blockHeight),
       confirmedAt: receipt.confirmedAt,
       receiptIntegrity: null,
+      networkIntegrity: null,
       hashIntegrity: null,
       txIdIntegrity: null,
       noteIntegrity: null,
       transactionIntegrity: null,
+      transactionLocated: null,
       chainConfirmed: null,
-      network: null,
-      networkId: null,
+      network: receipt.network || null,
+      networkId: receipt.network || null,
       explorerUrl: null,
+      reason: null,
     };
     if (!config.algorand.enabled) {
       return res.json({ success: true, data: { ...base, status: 'DISABLED' } });
     }
 
-    const selectedNetwork = networkFromRequest(req);
-    const selectedConfig = getNetworkConfig(selectedNetwork);
-    const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
+    if (!receipt.network) {
+      return res.json({
+        success: true,
+        data: { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNKNOWN' },
+      });
+    }
+
+    let selectedNetwork;
+    try {
+      selectedNetwork = resolveNetwork(receipt.network);
+    } catch (error) {
+      logger.warn('blockchain.anchor-network-unavailable', {
+        anchorId,
+        storedNetwork: receipt.network,
+      });
+      return res.json({
+        success: true,
+        data: { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNAVAILABLE' },
+      });
+    }
+    const requestedNetwork = requestedNetworkFromRequest(req);
+    if (requestedNetwork && resolveNetwork(requestedNetwork) !== selectedNetwork) {
+      throw new DomainError(
+        409,
+        'ALGORAND_ANCHOR_NETWORK_MISMATCH',
+        `Anchor ${anchorId} was submitted to ${selectedNetwork}`,
+      );
+    }
+    const expectedEventCode = eventCodeForAnchorId(anchorId);
+    if (!expectedEventCode) {
+      return res.json({
+        success: true,
+        data: { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_FORMAT_UNSUPPORTED' },
+      });
+    }
     try {
       const inspected = await inspectAnchorReceipt(
         receipt,
-        new AlgorandAdapter(selectedConfig),
+        adapterForNetwork(selectedNetwork),
         {
           anchorId,
-          eventCode: eventCodeForAnchorId(anchorId),
+          eventCode: expectedEventCode,
           tenantId: req.organization.id,
+          network: selectedNetwork,
         }
       );
-      const integrityVerified = inspected.receiptIntegrity
-        && inspected.hashIntegrity
-        && inspected.txIdIntegrity
-        && inspected.noteIntegrity
-        && inspected.transactionIntegrity;
-      const verified = Boolean(integrityVerified && inspected.chainConfirmed);
-      const status = verified
-        ? 'CONFIRMED'
-        : integrityVerified
-          ? 'UNCONFIRMED'
-          : 'MISMATCH';
       return res.json({
         success: true,
-        data: { ...base, ...inspected, verified, status },
+        data: { ...base, ...inspected },
       });
     } catch (error) {
       logger.warn('blockchain.anchor-verification-unavailable', {

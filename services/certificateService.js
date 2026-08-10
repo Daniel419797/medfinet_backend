@@ -13,6 +13,8 @@ const {
 const { assertResourceScope } = require('./resourceScopeService');
 const { withTenantTransaction } = require('./tenantContext');
 
+const adapterCache = new WeakMap();
+
 function safeFilenamePart(value) {
   return String(value || 'record')
     .trim()
@@ -78,14 +80,34 @@ function networkLabel(settings) {
 
 async function defaultInspectReceipt(receipt, settings, expected) {
   const AlgorandAdapter = require('./blockchain/adapters/AlgorandAdapter');
+  let adapter = adapterCache.get(settings);
+  if (!adapter) {
+    adapter = new AlgorandAdapter(settings);
+    adapterCache.set(settings, adapter);
+  }
   return inspectAnchorReceipt(
     AnchorReceipt.fromDatabase(receipt),
-    new AlgorandAdapter(settings),
+    adapter,
     expected,
   );
 }
 
-async function queueMissingEvidence(transaction, record, proof) {
+function networkSettingsForReceipt(settings, receipt) {
+  if (!receipt?.network) return null;
+  if (settings.network) {
+    return settings.network === receipt.network ? settings : null;
+  }
+  if (settings.networks) {
+    try {
+      return require('./blockchain/networkRegistry').getNetworkConfig(receipt.network);
+    } catch {
+      return null;
+    }
+  }
+  return Object.freeze({ ...settings, network: receipt.network });
+}
+
+async function queueMissingEvidence(transaction, record, proof, currentTime) {
   const outboxData = anchorOutboxData(record, proof);
   const where = {
     organizationId_idempotencyKey: {
@@ -98,7 +120,11 @@ async function queueMissingEvidence(transaction, record, proof) {
     await transaction.outboxEvent.upsert({ where, create: outboxData, update: {} });
     return true;
   }
-  if (!['FAILED', 'PUBLISHED'].includes(existing.status)) return false;
+  if (existing.status !== 'PUBLISHED') return false;
+  if (
+    existing.nextAttemptAt
+    && new Date(existing.nextAttemptAt).valueOf() > currentTime.valueOf()
+  ) return false;
 
   const recovered = await transaction.outboxEvent.updateMany({
     where: {
@@ -106,11 +132,12 @@ async function queueMissingEvidence(transaction, record, proof) {
       organizationId: record.organizationId,
       status: existing.status,
       attempts: existing.attempts,
+      nextAttemptAt: { lte: currentTime },
     },
     data: {
       status: 'PENDING',
       attempts: 0,
-      nextAttemptAt: new Date(),
+      nextAttemptAt: currentTime,
       lockedAt: null,
       lockedBy: null,
       publishedAt: null,
@@ -249,7 +276,13 @@ function createCertificateService(
         });
         let queued = false;
         if (settings.enabled && !receipt) {
-          queued = await queueMissingEvidence(transaction, record, material);
+          const currentTime = options.now ? options.now() : new Date();
+          queued = await queueMissingEvidence(
+            transaction,
+            record,
+            material,
+            currentTime,
+          );
         }
         await transaction.auditEvent.create({
           data: audit(
@@ -271,13 +304,17 @@ function createCertificateService(
       },
     );
 
+    const receiptSettings = proof.receipt
+      ? networkSettingsForReceipt(settings, proof.receipt)
+      : settings;
     const base = {
       recordId: immunizationId,
       fingerprint: proof.fingerprint,
       fingerprintVersion: proof.fingerprintVersion,
       anchorId: proof.anchorId,
       queued: proof.queued,
-      network: settings.enabled ? networkLabel(settings) : null,
+      network: settings.enabled && receiptSettings ? networkLabel(receiptSettings) : null,
+      networkId: proof.receipt?.network || settings.network || settings.defaultNetwork || null,
       txId: proof.receipt?.txId || null,
       blockHeight: proof.receipt?.blockHeight == null
         ? null
@@ -285,40 +322,38 @@ function createCertificateService(
       confirmedAt: proof.receipt?.confirmedAt || null,
       explorerUrl: null,
       receiptIntegrity: null,
+      networkIntegrity: null,
       hashIntegrity: null,
       txIdIntegrity: null,
       noteIntegrity: null,
       transactionIntegrity: null,
+      transactionLocated: null,
       chainConfirmed: null,
+      reason: null,
     };
     if (!settings.enabled) return { ...base, status: 'DISABLED' };
     if (!proof.receipt) return { ...base, status: 'PENDING' };
+    if (!proof.receipt.network) {
+      return { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNKNOWN' };
+    }
+    if (!receiptSettings) {
+      return { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNAVAILABLE' };
+    }
 
     try {
       const inspected = await (options.inspectReceipt || defaultInspectReceipt)(
         proof.receipt,
-        settings,
+        receiptSettings,
         {
           anchorId: proof.anchorId,
           eventCode: proof.eventCode,
           tenantId: context.organizationId,
+          network: proof.receipt.network,
         },
       );
-      const integrityVerified = inspected.receiptIntegrity
-        && inspected.hashIntegrity
-        && inspected.txIdIntegrity
-        && inspected.noteIntegrity
-        && inspected.transactionIntegrity;
-      const verified = Boolean(integrityVerified && inspected.chainConfirmed);
       return {
         ...base,
         ...inspected,
-        verified,
-        status: verified
-          ? 'CONFIRMED'
-          : integrityVerified
-            ? 'UNCONFIRMED'
-            : 'MISMATCH',
       };
     } catch (error) {
       logger.warn('certificate.algorand-proof-unavailable', {

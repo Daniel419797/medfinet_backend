@@ -23,8 +23,9 @@ URLs.
 ## Database-only evidence
 
 The private anchor receipt stores the proof ID, organization, event code,
-transaction ID, confirmed round, timestamp, nonce, digest, and confirmation
-metadata. Immunization records and amendments use canonical, versioned SHA-256
+Algorand network, transaction ID, confirmed round, timestamp, nonce, digest,
+and confirmation metadata. The stored network, rather than a caller-selected
+network, controls later verification. Immunization records and amendments use canonical, versioned SHA-256
 fingerprints (`v1`) so logically identical JSON evidence produces the same
 proof ID.
 
@@ -36,8 +37,11 @@ proof ID.
   platform-signed zero payment, and positive confirmation round all match.
 - `UNCONFIRMED`: every integrity check matches but the transaction has not
   reached a positive confirmed round.
-- `MISMATCH`: a receipt or live transaction integrity check differs.
-- `UNAVAILABLE`: the Algorand node could not be queried reliably.
+- `MISMATCH`: a stored claim conflicts with the expected claim, digest, or a
+  transaction that was successfully retrieved.
+- `UNAVAILABLE`: verification could not be completed, including node timeout,
+  an old transaction no longer retained by the configured node, or a legacy
+  receipt whose anchoring network was not recorded.
 
 Certificate QR payloads identify the deterministic proof and fingerprint
 schema version. They do not claim confirmation; clients must call the

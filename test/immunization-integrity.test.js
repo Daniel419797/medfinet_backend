@@ -39,6 +39,10 @@ test('creates a deterministic, explicitly versioned immunization fingerprint', (
   assert.equal(IMMUNIZATION_FINGERPRINT_VERSION, 1);
   assert.equal(first, reordered);
   assert.match(first, /^immunization-recorded:v1:immunization-1:[a-f0-9]{64}$/);
+  assert.notEqual(
+    first,
+    recordedImmunizationAnchorId({ ...record(), doseNumber: 2 }),
+  );
 });
 
 test('canonicalizes amendment JSON objects before fingerprinting', () => {

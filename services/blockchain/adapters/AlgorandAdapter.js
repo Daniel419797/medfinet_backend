@@ -1,19 +1,6 @@
 const algosdk = require('algosdk');
 const ChainAdapter = require('../ChainAdapter');
-
-function addressString(value) {
-  if (!value) return null;
-  return typeof value === 'string' ? value : value.toString();
-}
-
-function positiveRound(value) {
-  if (value === undefined || value === null) return false;
-  try {
-    return BigInt(value) > 0n;
-  } catch {
-    return false;
-  }
-}
+const { addressString, positiveRound } = require('../algorandValues');
 
 function transactionNote(value) {
   if (!value) return null;
@@ -29,6 +16,23 @@ function isNotFound(error) {
     error?.response?.status,
     error?.response?.statusCode,
   ].some((value) => Number(value) === 404);
+}
+
+async function withTimeout(request, timeoutMs) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`Algorand request timed out after ${timeoutMs}ms`);
+      error.name = 'AlgorandRequestTimeoutError';
+      error.code = 'ALGORAND_REQUEST_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 class AlgorandAdapter extends ChainAdapter {
@@ -48,6 +52,7 @@ class AlgorandAdapter extends ChainAdapter {
       || this._sdk.mnemonicToSecretKey(resolvedConfig.platformWalletMnemonic);
     this._confirmationRounds = resolvedConfig.confirmationRounds || 4;
     this._fee = resolvedConfig.fee || 1_000;
+    this._requestTimeoutMs = resolvedConfig.requestTimeoutMs || 10_000;
   }
 
   get defaultFee() {
@@ -102,7 +107,10 @@ class AlgorandAdapter extends ChainAdapter {
 
   async getTransaction(txId) {
     try {
-      const pending = await this.client.pendingTransactionInformation(txId).do();
+      const pending = await withTimeout(
+        this.client.pendingTransactionInformation(txId).do(),
+        this._requestTimeoutMs,
+      );
       const signed = pending.txn;
       const transaction = signed?.txn;
       const payment = transaction?.payment;
@@ -115,6 +123,7 @@ class AlgorandAdapter extends ChainAdapter {
         actualTxId = null;
       }
       return {
+        lookupStatus: 'FOUND',
         txId: actualTxId,
         note: transactionNote(transaction?.note),
         timestamp: roundTime
@@ -131,7 +140,12 @@ class AlgorandAdapter extends ChainAdapter {
         closeRemainderTo: addressString(payment?.closeRemainderTo),
       };
     } catch (error) {
-      if (isNotFound(error)) return null;
+      if (isNotFound(error)) {
+        return {
+          lookupStatus: 'UNAVAILABLE',
+          unavailableReason: 'TRANSACTION_NOT_RETAINED_OR_NOT_FOUND',
+        };
+      }
       throw error;
     }
   }
