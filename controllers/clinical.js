@@ -26,9 +26,6 @@ function authenticatedDisplayName(req) {
   if (typeof metadata.full_name === 'string' && metadata.full_name.trim()) {
     return metadata.full_name.trim();
   }
-  if (typeof req.user?.email === 'string' && req.user.email.includes('@')) {
-    return req.user.email.split('@')[0];
-  }
   return '';
 }
 
