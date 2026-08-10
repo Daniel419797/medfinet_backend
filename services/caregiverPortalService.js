@@ -65,6 +65,26 @@ function createCaregiverPortalService(prismaClient) {
         },
       });
 
+      if (!caregiver && account.email) {
+        const unlinkedMatches = await transaction.caregiver.findMany({
+          where: {
+            organizationId: context.organizationId,
+            subjectId: null,
+            email: { equals: account.email, mode: 'insensitive' },
+          },
+          orderBy: { createdAt: 'asc' },
+          take: 2,
+        });
+        if (unlinkedMatches.length > 1) {
+          throw new DomainError(
+            409,
+            'AMBIGUOUS_CAREGIVER_RECORD',
+            'More than one unlinked caregiver record uses this email. Resolve the duplicate records before connecting portal access.'
+          );
+        }
+        caregiver = unlinkedMatches[0] || null;
+      }
+
       if (caregiver) {
         caregiver = await transaction.caregiver.update({
           where: { id: caregiver.id },
@@ -72,6 +92,7 @@ function createCaregiverPortalService(prismaClient) {
             firstName,
             lastName,
             preferredLanguage,
+            subjectId: account.subjectId,
             ...(phone ? { phone } : {}),
             ...(account.email ? { email: account.email } : {}),
           },
