@@ -7,12 +7,22 @@ const REQUIRED_CLINICAL_CONSENT_SCOPES = [
   'CLINICAL_ALERTS',
 ];
 
-function consentSummary(grants, currentTime) {
+const REQUIRED_IMMUNIZATION_CONSENT_SCOPES = [
+  'IDENTITY',
+  'DEMOGRAPHICS',
+  'IMMUNIZATION',
+];
+
+function consentSummary(
+  grants,
+  currentTime,
+  requiredCategories = REQUIRED_CLINICAL_CONSENT_SCOPES
+) {
   const active = grants.find((grant) => (
     grant.status === 'ACTIVE'
     && grant.startsAt <= currentTime
     && (!grant.expiresAt || grant.expiresAt > currentTime)
-    && REQUIRED_CLINICAL_CONSENT_SCOPES.every((requiredCategory) => (
+    && requiredCategories.every((requiredCategory) => (
       grant.scopes.some(({ category, access }) => (
         category === requiredCategory && (access === 'READ' || access === 'WRITE')
       ))
@@ -24,9 +34,141 @@ function consentSummary(grants, currentTime) {
 }
 
 function adminTestReadBypass(membership) {
-  return process.env.admin === 'test'
+  return String(process.env.admin || '').trim().toLowerCase() === 'test'
     && membership?.status === 'ACTIVE'
     && ['OWNER', 'ADMIN'].includes(membership.role);
+}
+
+async function recordDisclosure({
+  transaction,
+  organizationId,
+  childId,
+  actorSubjectId,
+  purpose,
+  requiredCategories,
+  clinicalAccess,
+  consent,
+  testAdminBypass,
+}) {
+  await transaction.disclosureEvent.create({
+    data: {
+      organizationId,
+      childId,
+      actorSubjectId,
+      recipientType: 'ORGANIZATION',
+      recipientId: organizationId,
+      purpose,
+      requestedScopes: requiredCategories.map((category) => ({
+        category,
+        access: 'READ',
+      })),
+      decision: clinicalAccess === 'ALLOWED' ? 'ALLOWED' : 'DENIED',
+      reasonCode: testAdminBypass
+        ? 'ADMIN_TEST_BYPASS'
+        : clinicalAccess === 'ALLOWED'
+          ? 'ACTIVE_CONSENT'
+          : 'NO_APPLICABLE_CONSENT',
+      ...(consent.consentGrantId ? { consentGrantId: consent.consentGrantId } : {}),
+    },
+  });
+}
+
+function exposedConsent(consent, testAdminBypass) {
+  return testAdminBypass && consent.status !== 'GRANTED'
+    ? { ...consent, status: 'ADMIN_TEST_BYPASS' }
+    : consent;
+}
+
+async function loadNfcImmunizationSummary(
+  transaction,
+  organizationId,
+  child,
+  currentTime,
+  purpose = 'nfc-immunization-certificate-access',
+  actorSubjectId = 'system'
+) {
+  const [immunizations, consents, membership] = await Promise.all([
+    transaction.immunizationRecord.findMany({
+      where: {
+        organizationId,
+        childId: child.id,
+        status: { in: ['ACTIVE', 'AMENDED'] },
+      },
+      select: {
+        id: true,
+        vaccineCode: true,
+        doseNumber: true,
+        administeredAt: true,
+        status: true,
+      },
+      orderBy: { administeredAt: 'desc' },
+      take: 100,
+    }),
+    transaction.consentGrant.findMany({
+      where: {
+        organizationId,
+        childId: child.id,
+        recipientType: 'ORGANIZATION',
+        recipientId: organizationId,
+        purpose,
+        status: 'ACTIVE',
+        startsAt: { lte: currentTime },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: currentTime } }],
+      },
+      select: {
+        id: true,
+        status: true,
+        startsAt: true,
+        expiresAt: true,
+        scopes: { select: { category: true, access: true } },
+      },
+      take: 50,
+    }),
+    transaction.organizationMembership.findUnique({
+      where: {
+        organizationId_subjectId: {
+          organizationId,
+          subjectId: actorSubjectId,
+        },
+      },
+      select: { status: true, role: true },
+    }),
+  ]);
+
+  const consent = consentSummary(
+    consents,
+    currentTime,
+    REQUIRED_IMMUNIZATION_CONSENT_SCOPES
+  );
+  const testAdminBypass = adminTestReadBypass(membership);
+  const clinicalAccess = consent.status === 'GRANTED' || testAdminBypass
+    ? 'ALLOWED'
+    : 'CONSENT_REQUIRED';
+
+  await recordDisclosure({
+    transaction,
+    organizationId,
+    childId: child.id,
+    actorSubjectId,
+    purpose,
+    requiredCategories: REQUIRED_IMMUNIZATION_CONSENT_SCOPES,
+    clinicalAccess,
+    consent,
+    testAdminBypass,
+  });
+
+  return {
+    clinicalAccess,
+    allergies: [],
+    vaccination: {
+      recommendations: [],
+      dueCount: 0,
+      overdueCount: 0,
+      recordedDoses: clinicalAccess === 'ALLOWED' ? immunizations.length : 0,
+      records: clinicalAccess === 'ALLOWED' ? immunizations : [],
+    },
+    consent: exposedConsent(consent, testAdminBypass),
+  };
 }
 
 async function loadNfcClinicalSummary(
@@ -109,27 +251,19 @@ async function loadNfcClinicalSummary(
   const clinicalAccess = consent.status === 'GRANTED' || testAdminBypass
     ? 'ALLOWED'
     : 'CONSENT_REQUIRED';
-  await transaction.disclosureEvent.create({
-    data: {
-      organizationId,
-      childId: child.id,
-      actorSubjectId,
-      recipientType: 'ORGANIZATION',
-      recipientId: organizationId,
-      purpose,
-      requestedScopes: REQUIRED_CLINICAL_CONSENT_SCOPES.map((category) => ({
-        category,
-        access: 'READ',
-      })),
-      decision: clinicalAccess === 'ALLOWED' ? 'ALLOWED' : 'DENIED',
-      reasonCode: testAdminBypass
-        ? 'ADMIN_TEST_BYPASS'
-        : clinicalAccess === 'ALLOWED'
-          ? 'ACTIVE_CONSENT'
-          : 'NO_APPLICABLE_CONSENT',
-      ...(consent.consentGrantId ? { consentGrantId: consent.consentGrantId } : {}),
-    },
+
+  await recordDisclosure({
+    transaction,
+    organizationId,
+    childId: child.id,
+    actorSubjectId,
+    purpose,
+    requiredCategories: REQUIRED_CLINICAL_CONSENT_SCOPES,
+    clinicalAccess,
+    consent,
+    testAdminBypass,
   });
+
   return {
     clinicalAccess,
     allergies: clinicalAccess === 'ALLOWED' ? allergies : [],
@@ -143,10 +277,12 @@ async function loadNfcClinicalSummary(
         : 0,
       recordedDoses: clinicalAccess === 'ALLOWED' ? immunizations.length : 0,
     },
-    consent: testAdminBypass && consent.status !== 'GRANTED'
-      ? { ...consent, status: 'ADMIN_TEST_BYPASS' }
-      : consent,
+    consent: exposedConsent(consent, testAdminBypass),
   };
 }
 
-module.exports = { loadNfcClinicalSummary, consentSummary };
+module.exports = {
+  loadNfcClinicalSummary,
+  loadNfcImmunizationSummary,
+  consentSummary,
+};
