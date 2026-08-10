@@ -60,7 +60,7 @@ function createNfcPublicTapService(
 
 function publicStatus(binding, currentTime) {
   let status = 'ACTIVE';
-  let message = 'Open the authenticated Medfinet Scanner to access permitted records';
+  let message = 'Card recognized. Sign in to view permitted vaccination records and certificates.';
   if (binding.credential.status === 'ROTATED') {
     status = 'REPLACED';
     message = 'This card has been replaced. Present the replacement card at a Medfinet facility.';
