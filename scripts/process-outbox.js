@@ -24,6 +24,8 @@ const config = require('../config');
 const BlockchainAnchorService = require('../services/blockchain/BlockchainAnchorService');
 const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
+const CertificateNftRepository = require('../services/certificateNftRepository');
+const { createCertificateNftService } = require('../services/certificateNftService');
 const { getNetworkConfig } = require('../services/blockchain/networkRegistry');
 
 const runOnce = process.argv.includes('--once');
@@ -54,6 +56,7 @@ async function processOrganization(organizationId) {
   const analyticsGeneration = createAnalyticsGenerationService(prisma);
   const receiptStore = new AnchorReceiptRepository();
   let anchorService = null;
+  let certificateNftService = null;
   if (config.algorand.enabled) {
     const selectedConfig = getNetworkConfig();
     const adapter = new AlgorandAdapter(selectedConfig);
@@ -61,6 +64,10 @@ async function processOrganization(organizationId) {
       enabled: true,
       fee: selectedConfig.fee,
     });
+    certificateNftService = createCertificateNftService(
+      adapter,
+      new CertificateNftRepository(prisma),
+    );
   }
   const queueNotification = async (_handlerContext, event) => {
     await notificationQueue.queueOutboxEvent(context, event);
@@ -68,7 +75,7 @@ async function processOrganization(organizationId) {
   const outbox = createOutboxService(prisma, {
     excludedEventTypes: config.algorand.enabled
       ? []
-      : ['BLOCKCHAIN_ANCHOR_REQUESTED'],
+      : ['BLOCKCHAIN_ANCHOR_REQUESTED', 'BLOCKCHAIN_CERTIFICATE_NFT_REQUESTED'],
     handlers: {
       SYNC_BATCH_ACCEPTED: async (_handlerContext, event) => {
         await syncService.processBatch(context, event.payload.syncBatchId);
@@ -123,6 +130,24 @@ async function processOrganization(organizationId) {
           anchorId,
           eventCode,
           txId: receipt.txId,
+        });
+      },
+      BLOCKCHAIN_CERTIFICATE_NFT_REQUESTED: async (_handlerContext, event) => {
+        if (!certificateNftService) {
+          logger.info('blockchain.certificate-nft.skipped', { reason: 'disabled' });
+          return;
+        }
+        const receipt = await certificateNftService.mint({
+          organizationId: event.payload.tenantId,
+          immunizationId: event.payload.immunizationId,
+          proofId: event.payload.proofId,
+          fingerprint: event.payload.fingerprint,
+          fingerprintVersion: event.payload.fingerprintVersion,
+        });
+        logger.info('blockchain.certificate-nft.confirmed', {
+          assetId: String(receipt.assetId),
+          txId: receipt.txId,
+          network: receipt.network,
         });
       },
     },
