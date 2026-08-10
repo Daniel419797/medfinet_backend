@@ -29,6 +29,9 @@ module.exports = {
     (req) => service.grantConsent(context(req), req.params.id, req.body),
     201
   ),
+  authorities: handle(
+    (req) => service.listConsentAuthorities(context(req), req.params.id)
+  ),
   list: handle((req) => service.listConsents(context(req), req.params.id, {
     includeInactive: req.query.includeInactive === 'true',
   })),
