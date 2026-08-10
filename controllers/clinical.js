@@ -2,11 +2,15 @@ const { createClinicalService } = require('../services/clinicalService');
 const {
   createClinicalLifecycleService,
 } = require('../services/clinicalLifecycleService');
+const {
+  createClinicalTimelineService,
+} = require('../services/clinicalTimelineService');
 const { createCredentialService } = require('../services/credentialService');
 const { createCertificateService } = require('../services/certificateService');
 
 const service = createClinicalService();
 const lifecycleService = createClinicalLifecycleService();
+const timelineService = createClinicalTimelineService();
 const credentialService = createCredentialService();
 const certificateService = createCertificateService();
 const context = (req) => ({
@@ -106,6 +110,7 @@ module.exports = {
   scheduleAppointment: handle((req) => service.scheduleAppointment(context(req), req.params.id, req.body), 201),
   updateAppointmentStatus: handle((req) => service.updateAppointmentStatus(context(req), req.params.appointmentId, req.body)),
   getTimeline: handle((req) => service.getClinicalTimeline(context(req), req.params.id)),
+  getNutritionTimeline: handle((req) => timelineService.getNutrition(context(req), req.params.id)),
   downloadImmunizationCertificate,
   getImmunizationCertificateEvidence,
 };
