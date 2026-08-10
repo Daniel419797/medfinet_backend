@@ -67,6 +67,24 @@ function createClinicalTimelineService(prismaClient) {
     });
   }
 
+  async function getImmunizations(context, childId) {
+    return withTenantTransaction(database, context.organizationId, async (transaction) => {
+      await requireActiveChild(transaction, context, childId);
+      const immunizations = await transaction.immunizationRecord.findMany({
+        where: {
+          organizationId: context.organizationId,
+          childId,
+          status: { in: ['ACTIVE', 'AMENDED'] },
+        },
+        orderBy: { administeredAt: 'desc' },
+      });
+      await transaction.auditEvent.create({
+        data: audit(context, 'immunizations.read', 'child', childId),
+      });
+      return immunizations.map(withoutImmunizationIntegrityFields);
+    });
+  }
+
   async function getNutrition(context, childId) {
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
       await requireActiveChild(transaction, context, childId);
@@ -87,7 +105,7 @@ function createClinicalTimelineService(prismaClient) {
     });
   }
 
-  return { get, getNutrition };
+  return { get, getImmunizations, getNutrition };
 }
 
 module.exports = { createClinicalTimelineService };
