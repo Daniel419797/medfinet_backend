@@ -1,7 +1,8 @@
 const crypto = require('node:crypto');
 const { DomainError } = require('../utils/domainError');
 
-const IMMUNIZATION_FINGERPRINT_VERSION = 1;
+const LEGACY_IMMUNIZATION_FINGERPRINT_VERSION = 1;
+const IMMUNIZATION_FINGERPRINT_VERSION = 2;
 const IMMUNIZATION_FINGERPRINT_SCHEMA = 'medfinet.immunization-fingerprint';
 
 function legacyEvidenceDigest(values) {
@@ -34,14 +35,14 @@ function canonicalJson(value) {
   return JSON.stringify(canonicalValue(value));
 }
 
-function immunizationFingerprint(kind, evidence) {
+function immunizationFingerprint(kind, evidence, version = IMMUNIZATION_FINGERPRINT_VERSION) {
   return crypto
     .createHash('sha256')
     .update(canonicalJson({
       evidence,
       kind,
       schema: IMMUNIZATION_FINGERPRINT_SCHEMA,
-      version: IMMUNIZATION_FINGERPRINT_VERSION,
+      version,
     }), 'utf8')
     .digest('hex');
 }
@@ -57,8 +58,27 @@ function immunizationDeduplicationKey(childId, vaccineCode, doseNumber) {
   return legacyEvidenceDigest([childId, vaccineCode, doseNumber]);
 }
 
-function immunizationEvidence(record) {
+function certificateMetadataEvidence(metadata) {
+  if (!metadata) return null;
   return {
+    facilityId: metadata.facilityId || null,
+    facilityName: metadata.facilityName || null,
+    lga: metadata.lga || null,
+    recordedBySubjectId: metadata.recordedBySubjectId || null,
+    state: metadata.state || null,
+    vaccinatorName: metadata.vaccinatorName || null,
+    vaccinatorSubjectId: metadata.vaccinatorSubjectId || null,
+    ward: metadata.ward || null,
+  };
+}
+
+function immunizationEvidence(record, version = null) {
+  const activeVersion = version || (
+    record.certificateMetadata
+      ? IMMUNIZATION_FINGERPRINT_VERSION
+      : LEGACY_IMMUNIZATION_FINGERPRINT_VERSION
+  );
+  const evidence = {
     administeredAt: timestampValue(record.administeredAt),
     administeringSubjectId: record.administeringSubjectId,
     childId: record.childId,
@@ -73,11 +93,26 @@ function immunizationEvidence(record) {
     site: record.site || null,
     vaccineCode: record.vaccineCode,
   };
+  if (activeVersion >= 2) {
+    evidence.certificateMetadata = certificateMetadataEvidence(
+      record.certificateMetadata
+    );
+  }
+  return evidence;
 }
 
 function recordedImmunizationAnchorId(record) {
-  const digest = immunizationFingerprint('recorded', immunizationEvidence(record));
-  return `immunization-recorded:v${IMMUNIZATION_FINGERPRINT_VERSION}:${record.id}:${digest}`;
+  // Historical records that predate certificate snapshots must retain their
+  // exact v1 proof IDs. New records with certificate metadata use v2.
+  const version = record.certificateMetadata
+    ? IMMUNIZATION_FINGERPRINT_VERSION
+    : LEGACY_IMMUNIZATION_FINGERPRINT_VERSION;
+  const digest = immunizationFingerprint(
+    'recorded',
+    immunizationEvidence(record, version),
+    version
+  );
+  return `immunization-recorded:v${version}:${record.id}:${digest}`;
 }
 
 function amendedImmunizationAnchorId({
@@ -87,14 +122,32 @@ function amendedImmunizationAnchorId({
   replacement,
   reason,
 }) {
+  const carriesCertificateMetadata = Boolean(
+    previous
+      && Object.prototype.hasOwnProperty.call(previous, 'certificateMetadata')
+  ) || Boolean(
+    replacement
+      && Object.prototype.hasOwnProperty.call(replacement, 'certificateMetadata')
+  );
+  const version = carriesCertificateMetadata
+    ? IMMUNIZATION_FINGERPRINT_VERSION
+    : LEGACY_IMMUNIZATION_FINGERPRINT_VERSION;
   const digest = immunizationFingerprint('amended', {
     amendmentId,
     previous,
     reason,
     recordId,
     replacement,
-  });
-  return `immunization-amended:v${IMMUNIZATION_FINGERPRINT_VERSION}:${amendmentId}:${digest}`;
+  }, version);
+  return `immunization-amended:v${version}:${amendmentId}:${digest}`;
+}
+
+function fingerprintVersionFromAnchorId(anchorId) {
+  const match = String(anchorId || '').match(/:v(\d+):/);
+  const version = Number(match?.[1]);
+  return Number.isInteger(version) && version > 0
+    ? version
+    : LEGACY_IMMUNIZATION_FINGERPRINT_VERSION;
 }
 
 function duplicateImmunizationError(existingRecordId) {
@@ -121,9 +174,11 @@ function withoutImmunizationIntegrityFields(record) {
 
 module.exports = {
   IMMUNIZATION_FINGERPRINT_VERSION,
+  LEGACY_IMMUNIZATION_FINGERPRINT_VERSION,
   amendedImmunizationAnchorId,
   canonicalJson,
   duplicateImmunizationError,
+  fingerprintVersionFromAnchorId,
   immunizationFingerprint,
   immunizationDeduplicationKey,
   isDeduplicationConstraintError,
