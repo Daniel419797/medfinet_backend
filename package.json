@@ -22,7 +22,7 @@
     "ussd:ingress": "node gateway/ussdIngress.js",
     "ussd:verify:integration": "node scripts/verify-ussd-integration.js",
     "start": "node app.js",
-    "start:production": "node app.js",
+    "start:production": "prisma migrate deploy && node app.js",
     "test": "node --test test/**/*.test.js",
     "check": "node scripts/check-syntax.js",
     "db:generate": "prisma generate",
@@ -55,7 +55,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.0",
-    "@types/cors": "^2.8.0",
+    "@types/cors": "^2.4.0",
     "@types/express": "^4.17.0",
     "@types/jsonwebtoken": "^9.0.0",
     "@types/morgan": "^1.9.0",
