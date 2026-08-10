@@ -6,10 +6,18 @@ const {
 const {
   createChildIdentifierService,
 } = require('../services/childIdentifierService');
+const {
+  createCaregiverPortalService,
+} = require('../services/caregiverPortalService');
+const {
+  createIdentityProviderAdminService,
+} = require('../services/identityProviderAdminService');
 
 const identityService = createIdentityService();
 const amendmentService = createChildIdentityAmendmentService();
 const identifierService = createChildIdentifierService();
+const caregiverPortalService = createCaregiverPortalService();
+const identityProviderAdminService = createIdentityProviderAdminService();
 
 function contextFromRequest(req) {
   return {
@@ -87,6 +95,23 @@ async function createCaregiver(req, res, next) {
   try {
     const caregiver = await identityService.createCaregiver(contextFromRequest(req), req.body);
     return res.status(201).json({ success: true, data: caregiver });
+  } catch (error) {
+    return sendError(next, error);
+  }
+}
+
+async function connectParent(req, res, next) {
+  try {
+    const account = await identityProviderAdminService.resolveVerifiedAccount({
+      accountId: req.body.accountId,
+      email: req.body.accountEmail,
+    });
+    const result = await caregiverPortalService.connectParent(
+      contextFromRequest(req),
+      req.body,
+      account
+    );
+    return res.status(201).json({ success: true, data: result });
   } catch (error) {
     return sendError(next, error);
   }
@@ -197,6 +222,7 @@ module.exports = {
   getChild,
   getMyCaregiverProfile,
   createCaregiver,
+  connectParent,
   linkCaregiver,
   requestIdentityAmendment,
   reviewIdentityAmendment,
