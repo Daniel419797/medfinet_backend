@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const identityRoutes = require('./routes/identity');
+const caregiverPortalRoutes = require('./routes/caregiverPortal');
 const blockchainRoutes = require('./routes/blockchain');
 const webhookRoutes = require('./routes/webhooks');
 const publicRoutes = require('./routes/public');
@@ -96,6 +97,7 @@ app.use(
   }),
   publicRoutes
 );
+app.use('/api/v1', caregiverPortalRoutes);
 app.use('/api/v1', identityRoutes);
 app.use('/api/v1', blockchainRoutes);
 app.use('/api/v1/campaigns', campaignRoutes);

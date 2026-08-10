@@ -1,3 +1,4 @@
+const { DomainError } = require('../utils/domainError');
 const { createIdentityService } = require('../services/identityService');
 const { resolveSubjectId } = require('../middleware/organizationAccess');
 const {
@@ -6,10 +7,23 @@ const {
 const {
   createChildIdentifierService,
 } = require('../services/childIdentifierService');
+const {
+  createCaregiverPortalService,
+} = require('../services/caregiverPortalService');
+const {
+  createIdentityProviderAdminService,
+} = require('../services/identityProviderAdminService');
 
 const identityService = createIdentityService();
 const amendmentService = createChildIdentityAmendmentService();
 const identifierService = createChildIdentifierService();
+const caregiverPortalService = createCaregiverPortalService();
+let identityProviderAdminService;
+
+function accountResolver() {
+  identityProviderAdminService ||= createIdentityProviderAdminService();
+  return identityProviderAdminService;
+}
 
 function contextFromRequest(req) {
   return {
@@ -85,8 +99,32 @@ async function getMyCaregiverProfile(req, res, next) {
 
 async function createCaregiver(req, res, next) {
   try {
+    if (req.body.subjectId) {
+      throw new DomainError(
+        400,
+        'VERIFIED_PARENT_CONNECTION_REQUIRED',
+        'Portal access cannot be attached through caregiver registration. Use the verified Connect parent account workflow instead.'
+      );
+    }
     const caregiver = await identityService.createCaregiver(contextFromRequest(req), req.body);
     return res.status(201).json({ success: true, data: caregiver });
+  } catch (error) {
+    return sendError(next, error);
+  }
+}
+
+async function connectParent(req, res, next) {
+  try {
+    const account = await accountResolver().resolveVerifiedAccount({
+      accountId: req.body.accountId,
+      email: req.body.accountEmail,
+    });
+    const result = await caregiverPortalService.connectParent(
+      contextFromRequest(req),
+      req.body,
+      account
+    );
+    return res.status(201).json({ success: true, data: result });
   } catch (error) {
     return sendError(next, error);
   }
@@ -197,6 +235,7 @@ module.exports = {
   getChild,
   getMyCaregiverProfile,
   createCaregiver,
+  connectParent,
   linkCaregiver,
   requestIdentityAmendment,
   reviewIdentityAmendment,
