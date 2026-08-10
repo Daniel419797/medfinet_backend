@@ -1,5 +1,6 @@
 const os = require('node:os');
 const { prisma } = require('../utils/prisma');
+const { DomainError } = require('../utils/domainError');
 const { createOutboxService } = require('../services/outboxService');
 const { createSyncService } = require('../services/syncService');
 const { createSyncHandlers } = require('../services/syncHandlers');
@@ -20,6 +21,7 @@ const {
 } = require('../services/analyticsGenerationService');
 const { logger } = require('../utils/logger');
 const { createNfcLifecycleService } = require('../services/nfcLifecycleService');
+const { withTenantTransaction } = require('../services/tenantContext');
 const config = require('../config');
 const BlockchainAnchorService = require('../services/blockchain/BlockchainAnchorService');
 const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
@@ -58,18 +60,14 @@ async function processOrganization(organizationId) {
   const receiptStore = new AnchorReceiptRepository();
   const certificateNftQueue = createCertificateNftQueueService(prisma);
   let anchorService = null;
-  let certificateNftService = null;
+  let certificateNftAdapter = null;
   if (config.algorand.enabled) {
     const selectedConfig = getNetworkConfig();
-    const adapter = new AlgorandAdapter(selectedConfig);
-    anchorService = new BlockchainAnchorService(adapter, receiptStore, {
+    certificateNftAdapter = new AlgorandAdapter(selectedConfig);
+    anchorService = new BlockchainAnchorService(certificateNftAdapter, receiptStore, {
       enabled: true,
       fee: selectedConfig.fee,
     });
-    certificateNftService = createCertificateNftService(
-      adapter,
-      new CertificateNftRepository(prisma),
-    );
   }
   const queueNotification = async (_handlerContext, event) => {
     await notificationQueue.queueOutboxEvent(context, event);
@@ -127,27 +125,60 @@ async function processOrganization(organizationId) {
           return;
         }
         const { eventCode, anchorId, tenantId } = event.payload;
+        if (tenantId !== context.organizationId) {
+          throw new DomainError(
+            409,
+            'BLOCKCHAIN_TENANT_MISMATCH',
+            'Blockchain anchor request is not bound to the claimed organization',
+          );
+        }
         const receipt = await anchorService.anchorEvent(eventCode, anchorId, tenantId);
-        const nftQueue = await certificateNftQueue.queueFromAnchorEvent(context, event);
+        let nftQueue = { queued: false, reason: 'QUEUE_NOT_ATTEMPTED' };
+        try {
+          nftQueue = await certificateNftQueue.queueFromAnchorEvent(context, event);
+        } catch (error) {
+          nftQueue = { queued: false, reason: 'QUEUE_FAILED' };
+          logger.warn('blockchain.certificate-nft.queue-failed', {
+            anchorId,
+            eventCode,
+            errorCode: error?.code || null,
+            errorType: error?.name || 'Error',
+          });
+        }
         logger.info('blockchain.anchor.confirmed', {
           anchorId,
           eventCode,
           txId: receipt.txId,
           certificateNftQueued: nftQueue.queued,
+          certificateNftReason: nftQueue.reason || null,
         });
       },
       BLOCKCHAIN_CERTIFICATE_NFT_REQUESTED: async (_handlerContext, event) => {
-        if (!certificateNftService) {
+        if (!certificateNftAdapter) {
           logger.info('blockchain.certificate-nft.skipped', { reason: 'disabled' });
           return;
         }
-        const receipt = await certificateNftService.mint({
-          organizationId: event.payload.tenantId,
-          immunizationId: event.payload.immunizationId,
-          proofId: event.payload.proofId,
-          fingerprint: event.payload.fingerprint,
-          fingerprintVersion: event.payload.fingerprintVersion,
-        });
+        if (event.payload.tenantId !== context.organizationId) {
+          throw new DomainError(
+            409,
+            'CERTIFICATE_NFT_TENANT_MISMATCH',
+            'Certificate NFT request is not bound to the claimed organization',
+          );
+        }
+        const receipt = await withTenantTransaction(
+          prisma,
+          context.organizationId,
+          async (transaction) => createCertificateNftService(
+            certificateNftAdapter,
+            new CertificateNftRepository(transaction),
+          ).mint({
+            organizationId: context.organizationId,
+            immunizationId: event.payload.immunizationId,
+            proofId: event.payload.proofId,
+            fingerprint: event.payload.fingerprint,
+            fingerprintVersion: event.payload.fingerprintVersion,
+          }),
+        );
         logger.info('blockchain.certificate-nft.confirmed', {
           assetId: String(receipt.assetId),
           txId: receipt.txId,
