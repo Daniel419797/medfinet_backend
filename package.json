@@ -22,7 +22,7 @@
     "ussd:ingress": "node gateway/ussdIngress.js",
     "ussd:verify:integration": "node scripts/verify-ussd-integration.js",
     "start": "node app.js",
-    "start:production": "prisma migrate deploy && node app.js",
+    "start:production": "node app.js",
     "test": "node --test test/**/*.test.js",
     "check": "node scripts/check-syntax.js",
     "db:generate": "prisma generate",

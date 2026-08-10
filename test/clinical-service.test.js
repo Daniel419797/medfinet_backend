@@ -16,6 +16,7 @@ function context(organizationId = 'org-1') {
   return {
     organizationId,
     actorSubjectId: 'worker-1',
+    actorDisplayName: 'Worker One',
     role: 'HEALTH_WORKER',
     purpose: 'continuity-of-care',
   };
@@ -29,12 +30,22 @@ function tenantTransaction(overrides = {}) {
   };
 }
 
-test('records one vaccine dose with worker attribution, deduplication, audit, and hash-only anchoring', async () => {
+test('records one vaccine dose with separate recorder/vaccinator evidence and a v2 privacy anchor', async () => {
   const calls = [];
   const transaction = tenantTransaction({
     child: {
       async findFirst() {
         return { id: 'child-1', medfinetId: 'MED-1' };
+      },
+    },
+    facility: {
+      async findFirst() {
+        return {
+          id: 'facility-1',
+          name: 'Dennis Primary Health Centre',
+          administrativeArea: 'Delta',
+          isActive: true,
+        };
       },
     },
     immunizationRecord: {
@@ -66,6 +77,11 @@ test('records one vaccine dose with worker attribution, deduplication, audit, an
     vaccineCode: ' bcg ',
     doseNumber: 1,
     administeredAt: '2026-01-01T10:00:00.000Z',
+    facilityId: 'facility-1',
+    state: 'Delta',
+    lga: 'Uvwie',
+    ward: 'Ekpan',
+    vaccinatorMode: 'SELF',
     lotNumber: 'LOT-1',
     sourceOperationId: 'operation-1',
   });
@@ -73,6 +89,16 @@ test('records one vaccine dose with worker attribution, deduplication, audit, an
   assert.equal(record.vaccineCode, 'BCG');
   assert.equal(record.administeringSubjectId, 'worker-1');
   assert.equal(record.deduplicationKey, undefined);
+  assert.deepEqual(record.certificateMetadata, {
+    facilityId: 'facility-1',
+    facilityName: 'Dennis Primary Health Centre',
+    state: 'Delta',
+    lga: 'Uvwie',
+    ward: 'Ekpan',
+    vaccinatorName: 'Worker One',
+    vaccinatorSubjectId: 'worker-1',
+    recordedBySubjectId: 'worker-1',
+  });
   assert.match(
     calls.find(([kind]) => kind === 'immunization')[1].deduplicationKey,
     /^[a-f0-9]{64}$/
@@ -81,9 +107,12 @@ test('records one vaccine dose with worker attribution, deduplication, audit, an
   const anchor = calls.find(([kind]) => kind === 'outbox')[1];
   assert.equal(anchor.eventType, 'BLOCKCHAIN_ANCHOR_REQUESTED');
   assert.equal(anchor.payload.eventCode, 0x09);
-  assert.match(anchor.payload.anchorId, /^immunization-recorded:v1:immunization-1:[a-f0-9]{64}$/);
-  assert.equal(anchor.idempotencyKey, 'blockchain:9:v1:immunization-1');
-  assert.doesNotMatch(anchor.payload.anchorId, /BCG|LOT-1|child-1/);
+  assert.match(anchor.payload.anchorId, /^immunization-recorded:v2:immunization-1:[a-f0-9]{64}$/);
+  assert.equal(anchor.idempotencyKey, 'blockchain:9:v2:immunization-1');
+  assert.doesNotMatch(
+    anchor.payload.anchorId,
+    /BCG|LOT-1|child-1|Worker One|Dennis Primary Health Centre|Uvwie|Ekpan/
+  );
 });
 
 test('rejects a duplicate vaccine and dose for the same child', async () => {

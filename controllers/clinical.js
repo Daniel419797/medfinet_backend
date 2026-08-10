@@ -7,15 +7,32 @@ const {
 } = require('../services/clinicalTimelineService');
 const { createCredentialService } = require('../services/credentialService');
 const { createCertificateService } = require('../services/certificateService');
+const {
+  createImmunizationAmendmentService,
+} = require('../services/immunizationAmendmentService');
 
 const service = createClinicalService();
 const lifecycleService = createClinicalLifecycleService();
 const timelineService = createClinicalTimelineService();
 const credentialService = createCredentialService();
 const certificateService = createCertificateService();
+const immunizationAmendmentService = createImmunizationAmendmentService();
+
+function authenticatedDisplayName(req) {
+  const metadata = req.user?.user_metadata || {};
+  if (typeof metadata.name === 'string' && metadata.name.trim()) {
+    return metadata.name.trim();
+  }
+  if (typeof metadata.full_name === 'string' && metadata.full_name.trim()) {
+    return metadata.full_name.trim();
+  }
+  return '';
+}
+
 const context = (req) => ({
   organizationId: req.organization.id,
   actorSubjectId: req.actorSubjectId,
+  actorDisplayName: authenticatedDisplayName(req),
   role: req.organization.membership.role,
   membershipId: req.organization.membership.id,
   scopeMode: req.organization.membership.scopeMode,
@@ -94,7 +111,7 @@ module.exports = {
     )
   ),
   amendImmunization: handle(
-    (req) => lifecycleService.amendImmunization(
+    (req) => immunizationAmendmentService.amend(
       context(req),
       req.params.immunizationId,
       req.body

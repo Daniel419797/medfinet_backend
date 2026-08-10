@@ -1,6 +1,10 @@
 const { DomainError } = require('../utils/domainError');
 const { withTenantTransaction } = require('./tenantContext');
 const { requiredText } = require('./identityService');
+const {
+  enrichFacilities,
+  saveFacilityProfile,
+} = require('./certificateMetadataService');
 
 const ROLES = new Set([
   'OWNER',
@@ -161,7 +165,11 @@ function createOrganizationService(prismaClient) {
       organizationId: context.organizationId,
       name: requiredText(input.name, 'name'),
       code: normalizedCode(input.code),
-      administrativeArea: optionalText(input.administrativeArea, 'administrativeArea'),
+      // Keep the legacy field synchronized with State for older integrations.
+      administrativeArea: optionalText(
+        input.administrativeArea === undefined ? input.state : input.administrativeArea,
+        'administrativeArea'
+      ),
       address: optionalText(input.address, 'address'),
       phone: optionalText(input.phone, 'phone'),
       openingHours: input.openingHours || undefined,
@@ -171,7 +179,20 @@ function createOrganizationService(prismaClient) {
       isTemporary: input.isTemporary === true,
       temporaryUntil: optionalDate(input.temporaryUntil, 'temporaryUntil'),
     };
-    return createResource(context, 'facility', data);
+    return withTenantTransaction(database, context.organizationId, async (transaction) => {
+      const facility = await transaction.facility.create({ data });
+      if ([input.state, input.lga, input.ward].some((value) => value !== undefined)) {
+        await saveFacilityProfile(transaction, context, facility.id, {
+          state: input.state,
+          lga: input.lga,
+          ward: input.ward,
+        });
+      }
+      await transaction.auditEvent.create({
+        data: audit(context, 'facility.created', 'facility', facility.id),
+      });
+      return (await enrichFacilities(transaction, context, [facility]))[0];
+    });
   }
 
   async function createProgramme(context, input) {
@@ -231,12 +252,15 @@ function createOrganizationService(prismaClient) {
         },
         orderBy: { name: 'asc' },
       });
+      const result = resource === 'facility'
+        ? await enrichFacilities(transaction, context, records)
+        : records;
       await transaction.auditEvent.create({
         data: audit(context, `${resource}.list`, `${resource}-collection`, '*', {
-          resultCount: records.length,
+          resultCount: result.length,
         }),
       });
-      return records;
+      return result;
     });
   }
 

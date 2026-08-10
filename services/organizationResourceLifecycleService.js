@@ -1,6 +1,10 @@
 const { withTenantTransaction } = require('./tenantContext');
 const { requiredText } = require('./identityService');
 const { DomainError } = require('../utils/domainError');
+const {
+  enrichFacilities,
+  saveFacilityProfile,
+} = require('./certificateMetadataService');
 
 function optionalText(value, field, maximum = 160) {
   if (value === undefined) return undefined;
@@ -36,6 +40,8 @@ function createOrganizationResourceLifecycleService(prismaClient) {
           );
         }
       }
+      const profileTouched = [input.state, input.lga, input.ward]
+        .some((value) => value !== undefined);
       const data = {
         ...(input.name !== undefined
           ? { name: requiredText(input.name, 'name', 160) }
@@ -47,7 +53,9 @@ function createOrganizationResourceLifecycleService(prismaClient) {
               'administrativeArea'
             ),
           }
-          : {}),
+          : input.state !== undefined
+            ? { administrativeArea: optionalText(input.state, 'state') }
+            : {}),
         ...(typeof input.isActive === 'boolean'
           ? { isActive: input.isActive }
           : {}),
@@ -64,13 +72,22 @@ function createOrganizationResourceLifecycleService(prismaClient) {
           ? { temporaryUntil: input.temporaryUntil ? new Date(input.temporaryUntil) : null }
           : {}),
       };
-      if (Object.keys(data).length === 0) {
+      if (Object.keys(data).length === 0 && !profileTouched) {
         throw new DomainError(400, 'VALIDATION_ERROR', 'No facility changes provided');
       }
-      const facility = await transaction.facility.update({
-        where: { id: existing.id },
-        data,
-      });
+      const facility = Object.keys(data).length
+        ? await transaction.facility.update({
+          where: { id: existing.id },
+          data,
+        })
+        : existing;
+      if (profileTouched) {
+        await saveFacilityProfile(transaction, context, facility.id, {
+          state: input.state,
+          lga: input.lga,
+          ward: input.ward,
+        });
+      }
       await transaction.auditEvent.create({
         data: {
           organizationId: context.organizationId,
@@ -80,12 +97,15 @@ function createOrganizationResourceLifecycleService(prismaClient) {
           entityId: facility.id,
           purpose: context.purpose,
           metadata: {
-            changedFields: Object.keys(data),
+            changedFields: [
+              ...Object.keys(data),
+              ...(profileTouched ? ['state', 'lga', 'ward'] : []),
+            ],
             isActive: facility.isActive,
           },
         },
       });
-      return facility;
+      return (await enrichFacilities(transaction, context, [facility]))[0];
     });
   }
 

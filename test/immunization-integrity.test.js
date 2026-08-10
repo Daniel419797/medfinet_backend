@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   IMMUNIZATION_FINGERPRINT_VERSION,
+  LEGACY_IMMUNIZATION_FINGERPRINT_VERSION,
   amendedImmunizationAnchorId,
   recordedImmunizationAnchorId,
 } = require('../services/immunizationIntegrity');
@@ -29,23 +30,46 @@ function record() {
   };
 }
 
-test('creates a deterministic, explicitly versioned immunization fingerprint', () => {
-  const first = recordedImmunizationAnchorId(record());
+function certificateMetadata() {
+  return {
+    facilityId: 'facility-1',
+    facilityName: 'Dennis Primary Health Centre',
+    state: 'Delta',
+    lga: 'Uvwie',
+    ward: 'Ekpan',
+    vaccinatorName: 'Worker One',
+    vaccinatorSubjectId: 'health-worker-sensitive-id',
+    recordedBySubjectId: 'health-worker-sensitive-id',
+  };
+}
+
+test('preserves v1 proof IDs for legacy records while v2 covers certificate metadata', () => {
+  const legacy = recordedImmunizationAnchorId(record());
   const reordered = recordedImmunizationAnchorId({
     administeringSubjectId: record().administeringSubjectId,
     ...record(),
   });
+  const current = recordedImmunizationAnchorId({
+    ...record(),
+    certificateMetadata: certificateMetadata(),
+  });
 
-  assert.equal(IMMUNIZATION_FINGERPRINT_VERSION, 1);
-  assert.equal(first, reordered);
-  assert.match(first, /^immunization-recorded:v1:immunization-1:[a-f0-9]{64}$/);
+  assert.equal(LEGACY_IMMUNIZATION_FINGERPRINT_VERSION, 1);
+  assert.equal(IMMUNIZATION_FINGERPRINT_VERSION, 2);
+  assert.equal(legacy, reordered);
+  assert.match(legacy, /^immunization-recorded:v1:immunization-1:[a-f0-9]{64}$/);
+  assert.match(current, /^immunization-recorded:v2:immunization-1:[a-f0-9]{64}$/);
+  assert.notEqual(legacy, current);
   assert.notEqual(
-    first,
-    recordedImmunizationAnchorId({ ...record(), doseNumber: 2 }),
+    current,
+    recordedImmunizationAnchorId({
+      ...record(),
+      certificateMetadata: { ...certificateMetadata(), ward: 'Other Ward' },
+    }),
   );
 });
 
-test('canonicalizes amendment JSON objects before fingerprinting', () => {
+test('canonicalizes amendment JSON objects and versions metadata amendments independently', () => {
   const first = amendedImmunizationAnchorId({
     amendmentId: 'amendment-1',
     recordId: 'immunization-1',
@@ -60,13 +84,26 @@ test('canonicalizes amendment JSON objects before fingerprinting', () => {
     replacement: { route: 'ORAL', lotNumber: 'NEW' },
     reason: 'correction',
   });
+  const metadataAmendment = amendedImmunizationAnchorId({
+    amendmentId: 'amendment-2',
+    recordId: 'immunization-1',
+    previous: { certificateMetadata: certificateMetadata() },
+    replacement: {
+      certificateMetadata: { ...certificateMetadata(), vaccinatorName: 'Verified Worker' },
+    },
+    reason: 'verified paper register',
+  });
 
   assert.equal(first, reordered);
   assert.match(first, /^immunization-amended:v1:amendment-1:[a-f0-9]{64}$/);
+  assert.match(metadataAmendment, /^immunization-amended:v2:amendment-2:[a-f0-9]{64}$/);
 });
 
-test('Algorand note contains no tenant, child, worker, or clinical field', () => {
-  const sensitive = record();
+test('Algorand note contains no tenant, child, worker, location, or clinical field', () => {
+  const sensitive = {
+    ...record(),
+    certificateMetadata: certificateMetadata(),
+  };
   const anchorId = recordedImmunizationAnchorId(sensitive);
   const { note } = buildNote(0x09, sensitive.organizationId, anchorId);
   const publicBytes = note.toString('utf8');
@@ -79,6 +116,10 @@ test('Algorand note contains no tenant, child, worker, or clinical field', () =>
     sensitive.vaccineCode,
     sensitive.lotNumber,
     sensitive.notes,
+    sensitive.certificateMetadata.facilityName,
+    sensitive.certificateMetadata.lga,
+    sensitive.certificateMetadata.ward,
+    sensitive.certificateMetadata.vaccinatorName,
     anchorId,
   ]) {
     assert.equal(publicBytes.includes(value), false);
