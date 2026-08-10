@@ -15,6 +15,7 @@ const invoiceRoutes = require('./routes/invoices');
 const designRoutes = require('./routes/designs');
 const hospitalRoutes = require('./routes/hospitals');
 const healthWorkerRoutes = require('./routes/healthWorkers');
+const nutritionRoutes = require('./routes/nutrition');
 const { prisma } = require('./utils/prisma');
 const { requestContext } = require('./middleware/requestContext');
 const { createRateLimitMiddleware } = require('./middleware/rateLimit');
@@ -106,6 +107,7 @@ app.use('/api/v1/invoices', invoiceRoutes);
 app.use('/api/v1/designs', designRoutes);
 app.use('/api/v1/hospitals', hospitalRoutes);
 app.use('/api/v1/health-workers', healthWorkerRoutes);
+app.use('/api/v1/nutrition', nutritionRoutes);
 
 // Error handling
 app.use((err, req, res, next) => {
