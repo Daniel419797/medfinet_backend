@@ -35,7 +35,20 @@ const NFC_RESOLVER_ROLES = new Set([
   'EMERGENCY_COORDINATOR',
 ]);
 
+const NFC_IMMUNIZATION_ACCESS_ROLES = new Set([
+  'OWNER',
+  'ADMIN',
+  'HEALTH_WORKER',
+  'CAREGIVER',
+]);
+
 const IMMUNIZATION_ACCESS_INTENT = 'IMMUNIZATION_CERTIFICATES';
+
+function normalizeAccessIntent(value) {
+  return value === IMMUNIZATION_ACCESS_INTENT
+    ? IMMUNIZATION_ACCESS_INTENT
+    : 'CLINICAL_SUMMARY';
+}
 
 function createNfcTapService(
   prismaClient,
@@ -56,7 +69,13 @@ function createNfcTapService(
     return route;
   }
 
-  async function assertResolverMembership(transaction, organizationId, actorSubjectId) {
+  async function assertResolverMembership(
+    transaction,
+    organizationId,
+    actorSubjectId,
+    accessIntent = 'CLINICAL_SUMMARY',
+    childId = null
+  ) {
     const membership = await transaction.organizationMembership.findUnique({
       where: {
         organizationId_subjectId: {
@@ -66,43 +85,77 @@ function createNfcTapService(
       },
       select: { id: true, status: true, role: true },
     });
+    const allowedRoles = accessIntent === IMMUNIZATION_ACCESS_INTENT
+      ? NFC_IMMUNIZATION_ACCESS_ROLES
+      : NFC_RESOLVER_ROLES;
     if (
       !membership
       || membership.status !== 'ACTIVE'
-      || !NFC_RESOLVER_ROLES.has(membership.role)
+      || !allowedRoles.has(membership.role)
     ) {
       throw new DomainError(
         403,
         'NFC_ORGANIZATION_ACCESS_DENIED',
-        'The authenticated worker cannot scan cards for this organization'
+        'The authenticated account cannot access this NFC card for the requested purpose'
       );
     }
+
+    if (accessIntent === IMMUNIZATION_ACCESS_INTENT && membership.role === 'CAREGIVER') {
+      const link = childId
+        ? await transaction.childCaregiver.findFirst({
+          where: {
+            organizationId,
+            childId,
+            caregiver: { subjectId: actorSubjectId },
+          },
+          select: { id: true },
+        })
+        : null;
+      if (!link) {
+        throw new DomainError(
+          403,
+          'CAREGIVER_CHILD_ACCESS_DENIED',
+          'This child is not linked to the authenticated caregiver'
+        );
+      }
+    }
+
     return membership;
   }
 
   async function createChallenge(context, input) {
     const route = await routeFor(String(input.publicId || ''));
+    const accessIntent = normalizeAccessIntent(input.accessIntent);
     const authorization = await withTenantTransaction(
       database,
       route.organizationId,
       async (transaction) => {
-        const membership = await assertResolverMembership(
-          transaction,
-          route.organizationId,
-          context.actorSubjectId
-        );
         const binding = await transaction.nfcCredentialBinding.findFirst({
           where: {
             id: route.bindingId,
             organizationId: route.organizationId,
             status: 'ACTIVE',
           },
-          select: { id: true },
+          select: {
+            id: true,
+            credential: { select: { childId: true } },
+          },
         });
         if (!binding) {
           throw new DomainError(410, 'NFC_CARD_INACTIVE', 'NFC card is inactive');
         }
-        return { membership, bindingId: binding.id };
+        const membership = await assertResolverMembership(
+          transaction,
+          route.organizationId,
+          context.actorSubjectId,
+          accessIntent,
+          binding.credential.childId
+        );
+        return {
+          membership,
+          bindingId: binding.id,
+          childId: binding.credential.childId,
+        };
       }
     );
 
@@ -134,7 +187,9 @@ function createNfcTapService(
       await assertResolverMembership(
         transaction,
         route.organizationId,
-        context.actorSubjectId
+        context.actorSubjectId,
+        accessIntent,
+        authorization.childId
       );
       const [binding, device] = await Promise.all([
         transaction.nfcCredentialBinding.findFirst({
@@ -179,6 +234,7 @@ function createNfcTapService(
       expiresAt,
       deviceId,
       organizationId: route.organizationId,
+      accessIntent,
     };
   }
 
@@ -196,9 +252,7 @@ function createNfcTapService(
       : input.scanMode === TAGWRITER_DEMO_SCAN_MODE
         ? TAGWRITER_DEMO_SCAN_MODE
         : 'NATIVE_RAW';
-    const accessIntent = input.accessIntent === IMMUNIZATION_ACCESS_INTENT
-      ? IMMUNIZATION_ACCESS_INTENT
-      : 'CLINICAL_SUMMARY';
+    const accessIntent = normalizeAccessIntent(input.accessIntent);
     const tagWriterDemoScan = scanMode === TAGWRITER_DEMO_SCAN_MODE;
     const mirrored = tagWriterDemoScan ? null : parseMirroredValue(input.uc);
     const cardToken = assertCardToken(input.cardToken);
@@ -255,26 +309,13 @@ function createNfcTapService(
       if (!device?.publicKey) {
         throw new DomainError(403, 'NFC_SCANNER_NOT_ATTESTED', 'Scanner is not attested');
       }
-      const membership = await transaction.organizationMembership.findUnique({
-        where: {
-          organizationId_subjectId: {
-            organizationId,
-            subjectId: context.actorSubjectId,
-          },
-        },
-        select: { status: true, role: true },
-      });
-      if (
-        !membership
-        || membership.status !== 'ACTIVE'
-        || !NFC_RESOLVER_ROLES.has(membership.role)
-      ) {
-        throw new DomainError(
-          403,
-          'NFC_ORGANIZATION_ACCESS_DENIED',
-          'The authenticated worker can no longer scan cards for this organization'
-        );
-      }
+      await assertResolverMembership(
+        transaction,
+        organizationId,
+        context.actorSubjectId,
+        accessIntent,
+        challenge.binding.credential.childId
+      );
       verifyDeviceSignature(
         device.publicKey,
         scanAttestationPayload({ ...input, scanMode, originalitySignature }),
