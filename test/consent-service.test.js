@@ -141,6 +141,42 @@ test('rejects a consent grant from a caregiver without authority', async () => {
   );
 });
 
+test('lists only consent-authority caregivers without requiring prior disclosure consent', async () => {
+  const calls = [];
+  const transaction = baseTransaction({
+    childCaregiver: {
+      async findMany(input) {
+        calls.push(['authorities', input]);
+        return [{
+          relationship: 'MOTHER',
+          isPrimary: true,
+          caregiver: {
+            id: 'caregiver-1',
+            firstName: 'Adaeze',
+            lastName: 'Ibrahim',
+          },
+        }];
+      },
+    },
+    auditEvent: {
+      async create({ data }) {
+        calls.push(['audit', data]);
+      },
+    },
+  });
+  const service = createConsentService(databaseWithTransaction(transaction));
+
+  const authorities = await service.listConsentAuthorities(context(), 'child-1');
+
+  assert.equal(authorities[0].caregiver.id, 'caregiver-1');
+  assert.deepEqual(calls[0][1].where, {
+    organizationId: 'org-1',
+    childId: 'child-1',
+    hasConsentAuthority: true,
+  });
+  assert.equal(calls[1][1].action, 'consent.authorities-listed');
+});
+
 test('allows the granting caregiver to withdraw active consent', async () => {
   const calls = [];
   const transaction = baseTransaction({

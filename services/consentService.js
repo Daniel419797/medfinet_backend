@@ -199,6 +199,42 @@ function createConsentService(prismaClient) {
     });
   }
 
+  async function listConsentAuthorities(context, childId) {
+    return withTenantTransaction(database, context.organizationId, async (transaction) => {
+      await requireActiveChild(transaction, context, childId);
+      const authorities = await transaction.childCaregiver.findMany({
+        where: {
+          organizationId: context.organizationId,
+          childId,
+          hasConsentAuthority: true,
+        },
+        select: {
+          relationship: true,
+          isPrimary: true,
+          caregiver: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+        orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+      });
+      await transaction.auditEvent.create({
+        data: {
+          organizationId: context.organizationId,
+          actorSubjectId: context.actorSubjectId,
+          action: 'consent.authorities-listed',
+          entityType: 'child',
+          entityId: childId,
+          purpose: context.purpose,
+        },
+      });
+      return authorities;
+    });
+  }
+
   async function withdrawConsent(context, consentId, input) {
     const reason = requiredText(input.reason, 'reason', 500);
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
@@ -309,6 +345,7 @@ function createConsentService(prismaClient) {
 
   return {
     grantConsent,
+    listConsentAuthorities,
     listConsents,
     withdrawConsent,
     evaluateDisclosure,

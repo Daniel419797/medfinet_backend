@@ -480,6 +480,12 @@ router.post(
 );
 router.post('/children/:id/consents', auth, identityWriteAccess, consentController.grant);
 router.get(
+  '/children/:id/consent-authorities',
+  auth,
+  identityWriteAccess,
+  consentController.authorities
+);
+router.get(
   '/children/:id/consents',
   auth,
   childReadAccess,
