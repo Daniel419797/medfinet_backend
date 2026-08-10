@@ -128,9 +128,6 @@ async function loadNfcClinicalSummary(
           ? 'ACTIVE_CONSENT'
           : 'NO_APPLICABLE_CONSENT',
       ...(consent.consentGrantId ? { consentGrantId: consent.consentGrantId } : {}),
-      metadata: testAdminBypass
-        ? { testMode: true, role: membership.role }
-        : undefined,
     },
   });
   return {
