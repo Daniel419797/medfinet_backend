@@ -105,6 +105,48 @@ class AlgorandAdapter extends ChainAdapter {
     };
   }
 
+  async mintCertificateNft({ metadataHash, assetName, unitName }, fee) {
+    const digest = Buffer.from(metadataHash || []);
+    if (digest.length !== 32) {
+      throw new Error('Certificate NFT metadata hash must be exactly 32 bytes');
+    }
+    const params = await this.client.getTransactionParams().do();
+    const txn = this._sdk.makeAssetCreateTxnWithSuggestedParamsFromObject({
+      sender: this.platformAccount.addr,
+      total: 1n,
+      decimals: 0,
+      defaultFrozen: false,
+      unitName,
+      assetName,
+      assetMetadataHash: Uint8Array.from(digest),
+      suggestedParams: {
+        ...params,
+        fee: fee || this._fee,
+        flatFee: true,
+      },
+    });
+    const signed = txn.signTxn(this.platformAccount.sk);
+    const { txid: txId } = await this.client.sendRawTransaction(signed).do();
+    const confirmed = await this._sdk.waitForConfirmation(
+      this.client,
+      txId,
+      this._confirmationRounds,
+    );
+    const confirmedRound = confirmed.confirmedRound;
+    const assetId = confirmed.assetIndex ?? confirmed['asset-index'];
+    if (!positiveRound(confirmedRound) || assetId === undefined || assetId === null) {
+      throw new Error(`Algorand certificate NFT ${txId} did not confirm with an asset ID`);
+    }
+    return {
+      assetId,
+      txId,
+      blockHeight: confirmedRound,
+      confirmations: this._confirmationRounds,
+      network: this.networkId,
+      creatorAddress: addressString(this.platformAccount),
+    };
+  }
+
   async getTransaction(txId) {
     try {
       const pending = await withTimeout(
@@ -136,6 +178,7 @@ class AlgorandAdapter extends ChainAdapter {
         signer: addressString(signed?.sgnr || transaction?.sender),
         receiver: addressString(payment?.receiver),
         amount: payment?.amount ?? null,
+        createdAssetId: pending.assetIndex ?? pending['asset-index'] ?? null,
         rekeyTo: addressString(transaction?.rekeyTo),
         closeRemainderTo: addressString(payment?.closeRemainderTo),
       };
@@ -144,6 +187,42 @@ class AlgorandAdapter extends ChainAdapter {
         return {
           lookupStatus: 'UNAVAILABLE',
           unavailableReason: 'TRANSACTION_NOT_RETAINED_OR_NOT_FOUND',
+        };
+      }
+      throw error;
+    }
+  }
+
+  async getAsset(assetId) {
+    try {
+      const asset = await withTimeout(
+        this.client.getAssetByID(assetId).do(),
+        this._requestTimeoutMs,
+      );
+      const params = asset?.params || {};
+      return {
+        lookupStatus: 'FOUND',
+        assetId: asset?.index ?? assetId,
+        creator: addressString(params.creator),
+        total: params.total ?? null,
+        decimals: params.decimals ?? null,
+        defaultFrozen: Boolean(params.defaultFrozen),
+        unitName: params.unitName ?? params['unit-name'] ?? null,
+        assetName: params.name ?? params.assetName ?? params['asset-name'] ?? null,
+        url: params.url || null,
+        metadataHash: params.metadataHash
+          ? Buffer.from(params.metadataHash)
+          : null,
+        manager: addressString(params.manager),
+        reserve: addressString(params.reserve),
+        freeze: addressString(params.freeze),
+        clawback: addressString(params.clawback),
+      };
+    } catch (error) {
+      if (isNotFound(error)) {
+        return {
+          lookupStatus: 'UNAVAILABLE',
+          unavailableReason: 'ASSET_NOT_FOUND',
         };
       }
       throw error;
