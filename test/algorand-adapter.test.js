@@ -154,7 +154,7 @@ test('bounds stalled algod transaction lookups', async () => {
   );
 });
 
-test('mints a 1-of-1 immutable certificate asset using only the fingerprint as metadata hash', async () => {
+test('prepares and submits a 1-of-1 immutable certificate asset using only the fingerprint hash', async () => {
   let assetInput;
   const fingerprint = Buffer.from('ab'.repeat(32), 'hex');
   const client = {
@@ -164,7 +164,10 @@ test('mints a 1-of-1 immutable certificate asset using only the fingerprint as m
   const sdk = {
     makeAssetCreateTxnWithSuggestedParamsFromObject(input) {
       assetInput = input;
-      return { signTxn: () => Buffer.from('signed-nft') };
+      return {
+        txID: () => 'NFT-TX-1',
+        signTxn: () => Buffer.from('signed-nft'),
+      };
     },
     waitForConfirmation: async () => ({
       confirmedRound: 99n,
@@ -178,11 +181,12 @@ test('mints a 1-of-1 immutable certificate asset using only the fingerprint as m
     platformAccount: account,
   });
 
-  const result = await adapter.mintCertificateNft({
+  const prepared = await adapter.prepareCertificateNft({
     metadataHash: fingerprint,
     assetName: 'Medfinet Vaccine Certificate',
     unitName: 'MFVAX',
   });
+  const result = await adapter.submitPreparedCertificateNft(prepared);
 
   assert.equal(assetInput.sender, account.addr);
   assert.equal(assetInput.total, 1n);
@@ -194,6 +198,8 @@ test('mints a 1-of-1 immutable certificate asset using only the fingerprint as m
   for (const field of ['assetURL', 'manager', 'reserve', 'freeze', 'clawback', 'note']) {
     assert.equal(Object.hasOwn(assetInput, field), false, `${field} must not publish certificate data`);
   }
+  assert.equal(prepared.txId, 'NFT-TX-1');
+  assert.deepEqual(prepared.signedTransaction, Buffer.from('signed-nft'));
   assert.equal(result.assetId, 123456n);
   assert.equal(result.txId, 'NFT-TX-1');
   assert.equal(result.blockHeight, 99n);
@@ -203,17 +209,17 @@ test('mints a 1-of-1 immutable certificate asset using only the fingerprint as m
 
 test('reads certificate asset parameters needed for on-chain verification', async () => {
   const client = {
-    getAssetByID: (assetId) => ({
+    getAssetByID: () => ({
       do: async () => ({
-        index: assetId,
+        index: 987n,
         params: {
           creator: 'PLATFORM-ACCOUNT',
           total: 1n,
           decimals: 0,
-          defaultFrozen: false,
-          unitName: 'MFVAX',
-          name: 'Medfinet Vaccine Certificate',
-          metadataHash: Uint8Array.from(Buffer.from('cd'.repeat(32), 'hex')),
+          'default-frozen': false,
+          'unit-name': 'MFVAX',
+          'asset-name': 'Medfinet Vaccine Certificate',
+          'metadata-hash': Uint8Array.from(Buffer.from('cd'.repeat(32), 'hex')),
         },
       }),
     }),
@@ -231,10 +237,30 @@ test('reads certificate asset parameters needed for on-chain verification', asyn
   assert.equal(asset.creator, 'PLATFORM-ACCOUNT');
   assert.equal(asset.total, 1n);
   assert.equal(asset.decimals, 0);
+  assert.equal(asset.defaultFrozen, false);
   assert.equal(asset.url, null);
   assert.equal(asset.manager, null);
   assert.equal(asset.reserve, null);
   assert.equal(asset.freeze, null);
   assert.equal(asset.clawback, null);
   assert.equal(asset.metadataHash.length, 32);
+});
+
+test('does not invent an asset ID or default-frozen value when algod omits them', async () => {
+  const client = {
+    getAssetByID: () => ({
+      do: async () => ({ params: { creator: 'PLATFORM-ACCOUNT' } }),
+    }),
+  };
+  const adapter = new AlgorandAdapter(config(), {
+    sdk: {},
+    client,
+    platformAccount: { addr: 'PLATFORM-ACCOUNT', sk: Buffer.from('secret') },
+  });
+
+  const asset = await adapter.getAsset(987n);
+
+  assert.equal(asset.assetId, null);
+  assert.equal(asset.defaultFrozen, null);
+  assert.equal(asset.metadataHash, null);
 });
