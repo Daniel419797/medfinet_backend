@@ -21,12 +21,11 @@ const {
 } = require('../services/analyticsGenerationService');
 const { logger } = require('../utils/logger');
 const { createNfcLifecycleService } = require('../services/nfcLifecycleService');
-const { withTenantTransaction } = require('../services/tenantContext');
 const config = require('../config');
 const BlockchainAnchorService = require('../services/blockchain/BlockchainAnchorService');
 const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
-const CertificateNftRepository = require('../services/certificateNftRepository');
+const DurableCertificateNftRepository = require('../services/durableCertificateNftRepository');
 const { createCertificateNftService } = require('../services/certificateNftService');
 const { createCertificateNftQueueService } = require('../services/certificateNftQueueService');
 const { getNetworkConfig } = require('../services/blockchain/networkRegistry');
@@ -165,20 +164,16 @@ async function processOrganization(organizationId) {
             'Certificate NFT request is not bound to the claimed organization',
           );
         }
-        const receipt = await withTenantTransaction(
-          prisma,
-          context.organizationId,
-          async (transaction) => createCertificateNftService(
-            certificateNftAdapter,
-            new CertificateNftRepository(transaction),
-          ).mint({
-            organizationId: context.organizationId,
-            immunizationId: event.payload.immunizationId,
-            proofId: event.payload.proofId,
-            fingerprint: event.payload.fingerprint,
-            fingerprintVersion: event.payload.fingerprintVersion,
-          }),
-        );
+        const receipt = await createCertificateNftService(
+          certificateNftAdapter,
+          new DurableCertificateNftRepository(prisma, context.organizationId),
+        ).mint({
+          organizationId: context.organizationId,
+          immunizationId: event.payload.immunizationId,
+          proofId: event.payload.proofId,
+          fingerprint: event.payload.fingerprint,
+          fingerprintVersion: event.payload.fingerprintVersion,
+        });
         logger.info('blockchain.certificate-nft.confirmed', {
           assetId: String(receipt.assetId),
           txId: receipt.txId,
