@@ -105,6 +105,72 @@ class AlgorandAdapter extends ChainAdapter {
     };
   }
 
+  async prepareCertificateNft({ metadataHash, assetName, unitName }, fee) {
+    const digest = Buffer.from(metadataHash || []);
+    if (digest.length !== 32) {
+      throw new Error('Certificate NFT metadata hash must be exactly 32 bytes');
+    }
+    const params = await this.client.getTransactionParams().do();
+    const txn = this._sdk.makeAssetCreateTxnWithSuggestedParamsFromObject({
+      sender: this.platformAccount.addr,
+      total: 1n,
+      decimals: 0,
+      defaultFrozen: false,
+      unitName,
+      assetName,
+      assetMetadataHash: Uint8Array.from(digest),
+      suggestedParams: {
+        ...params,
+        fee: fee || this._fee,
+        flatFee: true,
+      },
+    });
+    const txId = txn.txID();
+    if (!txId) throw new Error('Unable to derive certificate NFT transaction ID');
+    return {
+      txId,
+      signedTransaction: Buffer.from(txn.signTxn(this.platformAccount.sk)),
+      network: this.networkId,
+      creatorAddress: addressString(this.platformAccount),
+    };
+  }
+
+  async submitPreparedCertificateNft(prepared) {
+    if (!prepared?.txId || !prepared?.signedTransaction) {
+      throw new Error('Prepared certificate NFT transaction is incomplete');
+    }
+    const submitted = await this.client
+      .sendRawTransaction(Buffer.from(prepared.signedTransaction))
+      .do();
+    const submittedTxId = submitted?.txid || prepared.txId;
+    if (submittedTxId !== prepared.txId) {
+      throw new Error('Algorand returned an unexpected certificate NFT transaction ID');
+    }
+    const confirmed = await this._sdk.waitForConfirmation(
+      this.client,
+      prepared.txId,
+      this._confirmationRounds,
+    );
+    const confirmedRound = confirmed.confirmedRound;
+    const assetId = confirmed.assetIndex ?? confirmed['asset-index'];
+    if (!positiveRound(confirmedRound) || assetId === undefined || assetId === null) {
+      throw new Error(`Algorand certificate NFT ${prepared.txId} did not confirm with an asset ID`);
+    }
+    return {
+      assetId,
+      txId: prepared.txId,
+      blockHeight: confirmedRound,
+      confirmations: this._confirmationRounds,
+      network: this.networkId,
+      creatorAddress: prepared.creatorAddress || addressString(this.platformAccount),
+    };
+  }
+
+  async mintCertificateNft(input, fee) {
+    const prepared = await this.prepareCertificateNft(input, fee);
+    return this.submitPreparedCertificateNft(prepared);
+  }
+
   async getTransaction(txId) {
     try {
       const pending = await withTimeout(
@@ -136,6 +202,7 @@ class AlgorandAdapter extends ChainAdapter {
         signer: addressString(signed?.sgnr || transaction?.sender),
         receiver: addressString(payment?.receiver),
         amount: payment?.amount ?? null,
+        createdAssetId: pending.assetIndex ?? pending['asset-index'] ?? null,
         rekeyTo: addressString(transaction?.rekeyTo),
         closeRemainderTo: addressString(payment?.closeRemainderTo),
       };
@@ -144,6 +211,42 @@ class AlgorandAdapter extends ChainAdapter {
         return {
           lookupStatus: 'UNAVAILABLE',
           unavailableReason: 'TRANSACTION_NOT_RETAINED_OR_NOT_FOUND',
+        };
+      }
+      throw error;
+    }
+  }
+
+  async getAsset(assetId) {
+    try {
+      const asset = await withTimeout(
+        this.client.getAssetByID(assetId).do(),
+        this._requestTimeoutMs,
+      );
+      const params = asset?.params || {};
+      const metadataHash = params.metadataHash ?? params['metadata-hash'] ?? null;
+      const defaultFrozen = params.defaultFrozen ?? params['default-frozen'] ?? null;
+      return {
+        lookupStatus: 'FOUND',
+        assetId: asset?.index ?? asset?.['asset-id'] ?? null,
+        creator: addressString(params.creator ?? params['creator']),
+        total: params.total ?? params['total'] ?? null,
+        decimals: params.decimals ?? params['decimals'] ?? null,
+        defaultFrozen: defaultFrozen === null ? null : Boolean(defaultFrozen),
+        unitName: params.unitName ?? params['unit-name'] ?? null,
+        assetName: params.name ?? params.assetName ?? params['asset-name'] ?? null,
+        url: params.url ?? params['url'] ?? null,
+        metadataHash: metadataHash ? Buffer.from(metadataHash) : null,
+        manager: addressString(params.manager ?? params['manager']),
+        reserve: addressString(params.reserve ?? params['reserve']),
+        freeze: addressString(params.freeze ?? params['freeze']),
+        clawback: addressString(params.clawback ?? params['clawback']),
+      };
+    } catch (error) {
+      if (isNotFound(error)) {
+        return {
+          lookupStatus: 'UNAVAILABLE',
+          unavailableReason: 'ASSET_NOT_FOUND',
         };
       }
       throw error;

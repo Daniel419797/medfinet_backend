@@ -4,6 +4,11 @@ const { logger } = require('../utils/logger');
 const AnchorReceipt = require('./blockchain/AnchorReceipt');
 const { EVENT_TYPES } = require('./blockchain/eventTypes');
 const { inspectAnchorReceipt } = require('./blockchain/receiptVerification');
+const CertificateNftRepository = require('./certificateNftRepository');
+const {
+  certificateNftOutboxData,
+  inspectCertificateNftReceipt,
+} = require('./certificateNftService');
 const { audit } = require('./clinicalValidation');
 const {
   IMMUNIZATION_FINGERPRINT_VERSION,
@@ -78,16 +83,28 @@ function networkLabel(settings) {
   return 'Algorand';
 }
 
-async function defaultInspectReceipt(receipt, settings, expected) {
+function adapterForSettings(settings) {
   const AlgorandAdapter = require('./blockchain/adapters/AlgorandAdapter');
   let adapter = adapterCache.get(settings);
   if (!adapter) {
     adapter = new AlgorandAdapter(settings);
     adapterCache.set(settings, adapter);
   }
+  return adapter;
+}
+
+async function defaultInspectReceipt(receipt, settings, expected) {
   return inspectAnchorReceipt(
     AnchorReceipt.fromDatabase(receipt),
-    adapter,
+    adapterForSettings(settings),
+    expected,
+  );
+}
+
+async function defaultInspectNftReceipt(receipt, settings, expected) {
+  return inspectCertificateNftReceipt(
+    receipt,
+    adapterForSettings(settings),
     expected,
   );
 }
@@ -145,6 +162,31 @@ async function queueMissingEvidence(transaction, record, proof, currentTime) {
     },
   });
   return recovered.count === 1;
+}
+
+function nftReceiptStoreAvailable(transaction) {
+  return typeof transaction?.$queryRawUnsafe === 'function'
+    && typeof transaction?.$executeRawUnsafe === 'function';
+}
+
+async function queueMissingNftEvidence(transaction, record, proof) {
+  const outboxData = certificateNftOutboxData(record, proof);
+  const where = {
+    organizationId_idempotencyKey: {
+      organizationId: record.organizationId,
+      idempotencyKey: outboxData.idempotencyKey,
+    },
+  };
+  const existing = await transaction.outboxEvent.findUnique({ where });
+  if (existing) {
+    return { queued: false, outboxStatus: existing.status };
+  }
+  await transaction.outboxEvent.upsert({
+    where,
+    create: outboxData,
+    update: {},
+  });
+  return { queued: true, outboxStatus: 'PENDING' };
 }
 
 function createCertificateService(
@@ -207,7 +249,26 @@ function createCertificateService(
     return record;
   }
 
+  async function ensureNftQueued(transaction, settings, record, proof) {
+    if (!settings.enabled || !nftReceiptStoreAvailable(transaction)) {
+      return { receipt: null, queued: false, outboxStatus: null, storeAvailable: false };
+    }
+    const repository = new CertificateNftRepository(transaction);
+    const receipt = await repository.findByProofId(record.organizationId, proof.anchorId);
+    if (receipt) {
+      return { receipt, queued: false, outboxStatus: 'PUBLISHED', storeAvailable: true };
+    }
+    const queue = await queueMissingNftEvidence(transaction, record, proof);
+    return {
+      receipt: null,
+      queued: queue.queued,
+      outboxStatus: queue.outboxStatus,
+      storeAvailable: true,
+    };
+  }
+
   async function create(context, childId, immunizationId) {
+    const settings = options.algorand || require('../config').algorand;
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
       const record = await findRecord(
         transaction,
@@ -217,6 +278,7 @@ function createCertificateService(
       );
 
       const proof = proofMaterial(record);
+      await ensureNftQueued(transaction, settings, record, proof);
       const verificationValue = JSON.stringify({
         type: 'MEDFINET_VACCINATION_CERTIFICATE',
         version: 3,
@@ -284,6 +346,12 @@ function createCertificateService(
             currentTime,
           );
         }
+        const nftState = await ensureNftQueued(
+          transaction,
+          settings,
+          record,
+          material,
+        );
         await transaction.auditEvent.create({
           data: audit(
             context,
@@ -300,9 +368,99 @@ function createCertificateService(
           fingerprintVersion,
           receipt,
           queued,
+          nftReceipt: nftState.receipt,
+          nftQueued: nftState.queued,
+          nftOutboxStatus: nftState.outboxStatus,
+          nftStoreAvailable: nftState.storeAvailable,
         };
       },
     );
+
+    const nftSettings = proof.nftReceipt
+      ? networkSettingsForReceipt(settings, proof.nftReceipt)
+      : settings;
+    const nftBase = {
+      status: 'UNAVAILABLE',
+      reason: null,
+      queued: proof.nftQueued,
+      assetId: proof.nftReceipt?.assetId == null ? null : String(proof.nftReceipt.assetId),
+      mintTxId: proof.nftReceipt?.txId || null,
+      blockHeight: proof.nftReceipt?.blockHeight == null
+        ? null
+        : String(proof.nftReceipt.blockHeight),
+      confirmedAt: proof.nftReceipt?.confirmedAt || null,
+      network: settings.enabled && nftSettings ? networkLabel(nftSettings) : null,
+      networkId: proof.nftReceipt?.network || settings.network || settings.defaultNetwork || null,
+      explorerUrl: null,
+      receiptIntegrity: null,
+      networkIntegrity: null,
+      transactionIntegrity: null,
+      assetIntegrity: null,
+      metadataIntegrity: null,
+      supplyIntegrity: null,
+      immutableIntegrity: null,
+      chainConfirmed: null,
+      verified: false,
+    };
+
+    let nftEvidence;
+    if (!settings.enabled) {
+      nftEvidence = { ...nftBase, status: 'DISABLED' };
+    } else if (!proof.nftStoreAvailable) {
+      nftEvidence = {
+        ...nftBase,
+        status: 'UNAVAILABLE',
+        reason: 'NFT_RECEIPT_STORE_UNAVAILABLE',
+      };
+    } else if (!proof.nftReceipt) {
+      const terminal = ['PUBLISHED', 'DEAD_LETTER'].includes(proof.nftOutboxStatus);
+      nftEvidence = {
+        ...nftBase,
+        status: terminal ? 'UNAVAILABLE' : 'PENDING',
+        reason: proof.nftOutboxStatus === 'PUBLISHED'
+          ? 'NFT_RECEIPT_MISSING'
+          : proof.nftOutboxStatus === 'DEAD_LETTER'
+            ? 'NFT_MINT_FAILED'
+            : null,
+      };
+    } else if (!proof.nftReceipt.network || !nftSettings) {
+      nftEvidence = {
+        ...nftBase,
+        status: 'UNAVAILABLE',
+        reason: 'NFT_NETWORK_UNAVAILABLE',
+      };
+    } else {
+      try {
+        nftEvidence = {
+          ...nftBase,
+          ...await (options.inspectNftReceipt || defaultInspectNftReceipt)(
+            proof.nftReceipt,
+            nftSettings,
+            {
+              organizationId: context.organizationId,
+              immunizationId,
+              proofId: proof.anchorId,
+              fingerprint: proof.fingerprint,
+              fingerprintVersion: proof.fingerprintVersion,
+              network: proof.nftReceipt.network,
+            },
+          ),
+        };
+      } catch (error) {
+        logger.warn('certificate.algorand-nft-proof-unavailable', {
+          assetId: proof.nftReceipt?.assetId == null
+            ? null
+            : String(proof.nftReceipt.assetId),
+          errorType: error?.name || 'Error',
+          errorCode: error?.code || null,
+        });
+        nftEvidence = {
+          ...nftBase,
+          status: 'UNAVAILABLE',
+          reason: 'NFT_VERIFICATION_UNAVAILABLE',
+        };
+      }
+    }
 
     const receiptSettings = proof.receipt
       ? networkSettingsForReceipt(settings, proof.receipt)
@@ -330,6 +488,7 @@ function createCertificateService(
       transactionLocated: null,
       chainConfirmed: null,
       reason: null,
+      nft: nftEvidence,
     };
     if (!settings.enabled) return { ...base, status: 'DISABLED' };
     if (!proof.receipt) return { ...base, status: 'PENDING' };
@@ -354,6 +513,7 @@ function createCertificateService(
       return {
         ...base,
         ...inspected,
+        nft: nftEvidence,
       };
     } catch (error) {
       logger.warn('certificate.algorand-proof-unavailable', {
@@ -361,7 +521,7 @@ function createCertificateService(
         errorType: error?.name || 'Error',
         errorCode: error?.code || null,
       });
-      return { ...base, status: 'UNAVAILABLE' };
+      return { ...base, status: 'UNAVAILABLE', nft: nftEvidence };
     }
   }
 
