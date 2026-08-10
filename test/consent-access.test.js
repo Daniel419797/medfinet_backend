@@ -30,6 +30,15 @@ function request() {
   };
 }
 
+function deniedDecision() {
+  return {
+    allowed: false,
+    reasonCode: 'NO_APPLICABLE_CONSENT',
+    consentGrantId: null,
+    disclosureEventId: 'disclosure-denied',
+  };
+}
+
 test('evaluates fixed server-owned scopes for the verified organization', async () => {
   let evaluation;
   const middleware = createConsentAccessMiddleware({
@@ -70,12 +79,7 @@ test('denies the request after recording an absent-consent decision', async () =
     scopes: [{ category: 'CLINICAL_ALERTS', access: 'READ' }],
     consentService: {
       async evaluateDisclosure() {
-        return {
-          allowed: false,
-          reasonCode: 'NO_APPLICABLE_CONSENT',
-          consentGrantId: null,
-          disclosureEventId: 'disclosure-denied',
-        };
+        return deniedDecision();
       },
     },
   });
@@ -88,4 +92,112 @@ test('denies the request after recording an absent-consent decision', async () =
   assert.equal(res.body.code, 'CONSENT_REQUIRED');
   assert.equal(res.body.disclosureEventId, 'disclosure-denied');
   assert.equal(res.body.requestId, 'request-1');
+});
+
+test('keeps normal consent enforcement for admins when admin is empty', async () => {
+  const previous = process.env.admin;
+  delete process.env.admin;
+  try {
+    const middleware = createConsentAccessMiddleware({
+      scopes: [{ category: 'IMMUNIZATION', access: 'READ' }],
+      consentService: {
+        async evaluateDisclosure() {
+          return deniedDecision();
+        },
+      },
+    });
+    const req = request();
+    req.organization.membership.role = 'ADMIN';
+    const res = responseRecorder();
+
+    await middleware(req, res, () => assert.fail('admin must not bypass without admin=test'));
+
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.code, 'CONSENT_REQUIRED');
+  } finally {
+    if (previous === undefined) delete process.env.admin;
+    else process.env.admin = previous;
+  }
+});
+
+test('allows OWNER and ADMIN read-only disclosures when admin=test', async () => {
+  const previous = process.env.admin;
+  process.env.admin = 'test';
+  try {
+    for (const role of ['OWNER', 'ADMIN']) {
+      const middleware = createConsentAccessMiddleware({
+        scopes: [
+          { category: 'IDENTITY', access: 'READ' },
+          { category: 'IMMUNIZATION', access: 'READ' },
+        ],
+        consentService: {
+          async evaluateDisclosure() {
+            return deniedDecision();
+          },
+        },
+      });
+      const req = request();
+      req.organization.membership.role = role;
+      const res = responseRecorder();
+      let nextCalled = false;
+
+      await middleware(req, res, () => {
+        nextCalled = true;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(res.statusCode, 200);
+      assert.equal(req.disclosureDecision.allowed, true);
+      assert.equal(req.disclosureDecision.reasonCode, 'ADMIN_TEST_BYPASS');
+      assert.equal(req.consentBypass.type, 'ADMIN_TEST');
+      assert.equal(req.consentBypass.originalReasonCode, 'NO_APPLICABLE_CONSENT');
+    }
+  } finally {
+    if (previous === undefined) delete process.env.admin;
+    else process.env.admin = previous;
+  }
+});
+
+test('admin=test does not bypass consent for non-admin roles or write scopes', async () => {
+  const previous = process.env.admin;
+  process.env.admin = 'test';
+  try {
+    const nonAdminMiddleware = createConsentAccessMiddleware({
+      scopes: [{ category: 'IMMUNIZATION', access: 'READ' }],
+      consentService: {
+        async evaluateDisclosure() {
+          return deniedDecision();
+        },
+      },
+    });
+    const healthWorkerRequest = request();
+    const healthWorkerResponse = responseRecorder();
+    await nonAdminMiddleware(
+      healthWorkerRequest,
+      healthWorkerResponse,
+      () => assert.fail('health worker must not bypass consent')
+    );
+    assert.equal(healthWorkerResponse.statusCode, 403);
+
+    const writeMiddleware = createConsentAccessMiddleware({
+      scopes: [{ category: 'CLIMATE', access: 'WRITE' }],
+      consentService: {
+        async evaluateDisclosure() {
+          return deniedDecision();
+        },
+      },
+    });
+    const adminRequest = request();
+    adminRequest.organization.membership.role = 'ADMIN';
+    const adminResponse = responseRecorder();
+    await writeMiddleware(
+      adminRequest,
+      adminResponse,
+      () => assert.fail('write scope must not bypass consent')
+    );
+    assert.equal(adminResponse.statusCode, 403);
+  } finally {
+    if (previous === undefined) delete process.env.admin;
+    else process.env.admin = previous;
+  }
 });
