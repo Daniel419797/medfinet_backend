@@ -94,6 +94,32 @@ test('denies the request after recording an absent-consent decision', async () =
   assert.equal(res.body.requestId, 'request-1');
 });
 
+test('keeps normal consent enforcement for admins when admin is empty', async () => {
+  const previous = process.env.admin;
+  delete process.env.admin;
+  try {
+    const middleware = createConsentAccessMiddleware({
+      scopes: [{ category: 'IMMUNIZATION', access: 'READ' }],
+      consentService: {
+        async evaluateDisclosure() {
+          return deniedDecision();
+        },
+      },
+    });
+    const req = request();
+    req.organization.membership.role = 'ADMIN';
+    const res = responseRecorder();
+
+    await middleware(req, res, () => assert.fail('admin must not bypass without admin=test'));
+
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.code, 'CONSENT_REQUIRED');
+  } finally {
+    if (previous === undefined) delete process.env.admin;
+    else process.env.admin = previous;
+  }
+});
+
 test('allows OWNER and ADMIN read-only disclosures when admin=test', async () => {
   const previous = process.env.admin;
   process.env.admin = 'test';
