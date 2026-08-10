@@ -34,15 +34,25 @@ The public chain sees only generic ASA parameters, the 32-byte cryptographic
 commitment, the platform creator address, the asset ID and normal Algorand
 transaction data.
 
-## Private receipt
+## Private receipt and retry safety
 
 Medfinet stores the mapping between the private certificate proof and the public
-asset in `certificate_nft_receipts`. The receipt records the tenant,
-immunization, proof ID, fingerprint version, fingerprint, network, asset ID,
-mint transaction, confirmed round, platform creator and confirmation time.
+asset in `certificate_nft_receipts`. Receipt access is protected by database
+row-level tenant isolation using `app.current_organization_id`.
 
-Receipt lookups are tenant-bound. The asset ID alone is not used to locate a
-child or clinical record.
+Before a chain submission, Medfinet prepares and signs the asset-creation
+transaction and persists a `PENDING` mint intent containing its deterministic
+transaction ID and signed bytes. Only then is the transaction submitted. A
+retry reuses or reconciles that same transaction instead of preparing a second
+asset creation, preventing an application retry from intentionally minting a
+second NFT for the same proof.
+
+After confirmation, the same row becomes `CONFIRMED` and stores the asset ID,
+confirmed round and confirmation time. The stored signed transaction is cleared.
+
+The receipt stores private tenant/immunization/proof identifiers only in
+Medfinet's database; those identifiers are not copied into ASA metadata. The
+asset ID alone is not used to locate a child or clinical record.
 
 ## Lifecycle
 
@@ -65,9 +75,18 @@ The certificate evidence endpoint verifies both layers independently:
    decimals, metadata hash, absence of an asset URL, absence of administrative
    asset addresses and positive confirmation round.
 
-The nested NFT evidence reports `DISABLED`, `PENDING`, `CONFIRMED`, `MISMATCH`
-or `UNAVAILABLE`. A client must not present the NFT as verified unless the
-current status is `CONFIRMED`.
+The nested NFT evidence reports `DISABLED`, `PENDING`, `CONFIRMED`,
+`UNCONFIRMED`, `MISMATCH` or `UNAVAILABLE`. A client must not present the NFT as
+verified unless the current status is `CONFIRMED`.
+
+The configured algod transaction lookup uses pending-transaction information,
+which is not guaranteed to retain old mint transactions indefinitely. For an
+older certificate the mint transaction layer can therefore become
+`UNAVAILABLE` with reason `NFT_MINT_TRANSACTION_LOOKUP_UNAVAILABLE` even though
+the ASA itself still exists. That state does not by itself mean that the asset
+was tampered with; it means Medfinet could not re-check the old mint transaction
+through the configured algod endpoint. A `MISMATCH`, by contrast, is reserved
+for evidence that was located but conflicts with the stored proof.
 
 The certificate QR continues to identify the deterministic vaccination proof.
 That proof is sufficient for the authenticated evidence endpoint to resolve the
