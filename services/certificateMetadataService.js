@@ -50,6 +50,14 @@ function positionalPlaceholders(count, startAt = 2) {
   return Array.from({ length: count }, (_, index) => `$${startAt + index}`).join(', ');
 }
 
+function requirePersistedRow(rows, code, message) {
+  const row = rows?.[0];
+  if (!row) {
+    throw new DomainError(409, code, message);
+  }
+  return row;
+}
+
 async function readFacilityProfile(transaction, context, facilityId) {
   if (!facilityId || !supportsCertificateStore(transaction)) return null;
   const rows = await transaction.$queryRawUnsafe(
@@ -125,13 +133,17 @@ async function saveFacilityProfile(transaction, context, facilityId, input = {})
     ward,
     context.actorSubjectId
   );
-  return rows[0];
+  return requirePersistedRow(
+    rows,
+    'FACILITY_PROFILE_TENANT_CONFLICT',
+    'Facility certificate profile could not be persisted for this organization'
+  );
 }
 
 function mergeFacilityProfile(facility, profile) {
   return {
     ...facility,
-    state: profile?.state || facility.administrativeArea || null,
+    state: profile?.state || null,
     lga: profile?.lga || null,
     ward: profile?.ward || null,
   };
@@ -273,7 +285,11 @@ async function saveImmunizationSnapshot(
     snapshot.vaccinatorSubjectId || null,
     snapshot.recordedBySubjectId
   );
-  return rows[0];
+  return requirePersistedRow(
+    rows,
+    'IMMUNIZATION_SNAPSHOT_TENANT_CONFLICT',
+    'Vaccination certificate snapshot could not be persisted for this organization'
+  );
 }
 
 async function facilityLocation(
@@ -308,7 +324,7 @@ async function facilityLocation(
     profile,
     values: {
       facilityName: facility.name,
-      state: profile?.state || facility.administrativeArea || null,
+      state: profile?.state || null,
       lga: profile?.lga || null,
       ward: profile?.ward || null,
     },
@@ -325,7 +341,9 @@ function resolveVaccinator(context, input = {}, existing = null, { initial = fal
     };
   }
 
-  const mode = input.vaccinatorMode || (nameProvided ? 'OTHER' : 'SELF');
+  const mode = modeProvided
+    ? input.vaccinatorMode
+    : (nameProvided ? 'OTHER' : 'SELF');
   if (!['SELF', 'OTHER'].includes(mode)) {
     throw new DomainError(
       400,
