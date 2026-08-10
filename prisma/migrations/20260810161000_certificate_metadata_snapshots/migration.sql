@@ -18,6 +18,27 @@ CREATE TABLE medfinet_certificate.facility_profiles (
 CREATE INDEX facility_profiles_organization_id_idx
   ON medfinet_certificate.facility_profiles(organization_id);
 
+-- Move the legacy administrative-area value into the structured State field once.
+-- LGA and Ward intentionally remain unset until an authorized user verifies them.
+INSERT INTO medfinet_certificate.facility_profiles (
+  facility_id,
+  organization_id,
+  state,
+  lga,
+  ward,
+  updated_by_subject_id
+)
+SELECT
+  id,
+  "organizationId",
+  NULLIF(BTRIM("administrativeArea"), ''),
+  NULL,
+  NULL,
+  'migration:legacy-administrative-area'
+FROM public.facilities
+WHERE NULLIF(BTRIM("administrativeArea"), '') IS NOT NULL
+ON CONFLICT (facility_id) DO NOTHING;
+
 CREATE TABLE medfinet_certificate.immunization_snapshots (
   immunization_id TEXT PRIMARY KEY REFERENCES public.immunization_records(id) ON DELETE CASCADE,
   organization_id TEXT NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
