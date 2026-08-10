@@ -393,9 +393,9 @@ async function buildAmendedImmunizationSnapshot(
     && facilityId !== (existingSnapshot?.facilityId || existingRecord.facilityId || null);
   const location = await facilityLocation(transaction, context, facilityId);
 
-  // Do not reconstruct historical certificate facts from a facility's current
-  // profile. A legacy record without a snapshot must explicitly supply State,
-  // LGA, Ward and vaccinator details from source evidence.
+  // Do not reconstruct any historical certificate fact from a facility's
+  // current profile. A legacy record without a snapshot must explicitly supply
+  // the facility/site name, State, LGA, Ward and vaccinator from source evidence.
   const base = existingSnapshot
     ? (facilityChanged
       ? location?.values || {}
@@ -406,7 +406,7 @@ async function buildAmendedImmunizationSnapshot(
         ward: existingSnapshot.ward || location?.values.ward,
       })
     : {
-      facilityName: location?.values.facilityName || null,
+      facilityName: null,
       state: null,
       lga: null,
       ward: null,
