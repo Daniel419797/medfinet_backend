@@ -97,7 +97,189 @@ test('loads a tenant-scoped immunization and returns a PNG without publishing ch
   assert.equal(result.buffer.toString(), 'private-png');
   assert.equal(renderedData.childName, 'Amina Okafor');
   const qrPayload = JSON.parse(renderedData.verificationValue);
-  assert.deepEqual(Object.keys(qrPayload).sort(), ['fingerprint', 'recordId', 'type', 'version']);
+  assert.deepEqual(Object.keys(qrPayload).sort(), [
+    'algorandAnchorId',
+    'fingerprint',
+    'recordId',
+    'type',
+    'version',
+  ]);
   assert.equal(qrPayload.recordId, 'imm-1');
+  assert.equal(qrPayload.version, 2);
+  assert.match(
+    qrPayload.algorandAnchorId,
+    /^immunization-recorded:imm-1:[a-f0-9]{64}$/,
+  );
   assert.equal(auditEvents[0].action, 'immunization-certificate.downloaded');
+});
+
+test('queues an Algorand fingerprint anchor without publishing clinical data', async () => {
+  let queued;
+  const auditEvents = [];
+  const transaction = {
+    $executeRawUnsafe: async () => undefined,
+    immunizationRecord: {
+      findFirst: async () => ({
+        id: 'imm-1',
+        organizationId: 'org-1',
+        childId: 'child-1',
+        facilityId: null,
+        programmeId: null,
+        vaccineCode: 'BCG',
+        doseNumber: 1,
+        administeredAt: new Date('2026-01-10T08:00:00.000Z'),
+        status: 'ACTIVE',
+        updatedAt: new Date('2026-01-10T08:00:00.000Z'),
+        child: { firstName: 'Amina', lastName: 'Okafor' },
+        facility: null,
+      }),
+    },
+    anchorReceipt: { findUnique: async () => null },
+    outboxEvent: {
+      findUnique: async () => null,
+      upsert: async ({ create }) => { queued = create; return create; },
+    },
+    auditEvent: {
+      create: async ({ data }) => { auditEvents.push(data); return data; },
+    },
+  };
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: {
+      enabled: true,
+      algodServer: 'not-a-valid-url',
+    },
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.status, 'PENDING');
+  assert.equal(result.queued, true);
+  assert.equal(result.network, 'Algorand');
+  assert.equal(queued.payload.eventCode, 0x09);
+  assert.match(
+    queued.payload.anchorId,
+    /^immunization-recorded:imm-1:[a-f0-9]{64}$/,
+  );
+  assert.equal(JSON.stringify(queued.payload).includes('Amina'), false);
+  assert.equal(JSON.stringify(queued.payload).includes('BCG'), false);
+  assert.equal(auditEvents[0].action, 'immunization-certificate.evidence-viewed');
+  assert.equal(auditEvents[0].entityId, 'imm-1');
+  assert.equal(auditEvents[0].metadata.childId, 'child-1');
+  assert.equal(auditEvents[0].metadata.anchorId, queued.payload.anchorId);
+});
+
+test('uses the latest amendment anchor for an amended certificate', async () => {
+  let queued;
+  const transaction = {
+    $executeRawUnsafe: async () => undefined,
+    immunizationRecord: {
+      findFirst: async () => ({
+        id: 'imm-1',
+        organizationId: 'org-1',
+        childId: 'child-1',
+        facilityId: null,
+        programmeId: null,
+        vaccineCode: 'BCG',
+        doseNumber: 1,
+        administeredAt: new Date('2026-01-10T08:00:00.000Z'),
+        status: 'AMENDED',
+        child: { firstName: 'Amina', lastName: 'Okafor' },
+        facility: null,
+        amendments: [{
+          id: 'amendment-1',
+          reason: 'Corrected the lot number',
+          previousData: { lotNumber: 'LOT-OLD' },
+          replacementData: { lotNumber: 'LOT-NEW' },
+        }],
+      }),
+    },
+    anchorReceipt: { findUnique: async () => null },
+    outboxEvent: {
+      findUnique: async () => null,
+      upsert: async ({ create }) => { queued = create; return create; },
+    },
+    auditEvent: { create: async ({ data }) => data },
+  };
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: {
+      enabled: true,
+      algodServer: 'https://testnet-api.algonode.cloud',
+    },
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(queued.payload.eventCode, 0x0A);
+  assert.equal(queued.aggregateId, 'amendment-1');
+  assert.match(
+    queued.payload.anchorId,
+    /^immunization-amended:amendment-1:[a-f0-9]{64}$/,
+  );
+  assert.equal(result.fingerprint, queued.payload.anchorId.split(':').at(-1));
+});
+
+test('reports confirmed evidence only after the Algorand note is verified', async () => {
+  const transaction = {
+    $executeRawUnsafe: async () => undefined,
+    immunizationRecord: {
+      findFirst: async () => ({
+        id: 'imm-1',
+        organizationId: 'org-1',
+        childId: 'child-1',
+        facilityId: null,
+        programmeId: null,
+        vaccineCode: 'BCG',
+        doseNumber: 1,
+        administeredAt: new Date('2026-01-10T08:00:00.000Z'),
+        status: 'ACTIVE',
+        updatedAt: new Date('2026-01-10T08:00:00.000Z'),
+        child: { firstName: 'Amina', lastName: 'Okafor' },
+        facility: null,
+      }),
+    },
+    anchorReceipt: {
+      findUnique: async ({ where }) => ({
+        anchorId: where.anchorId,
+        eventCode: 0x09,
+        eventCategory: 'clinical',
+        tenantId: 'org-1',
+        txId: 'ALGORAND-TX-1',
+        blockHeight: 42n,
+        isoTimestamp: '2026-01-10T08:01:00.000Z',
+        nonce: '0011223344556677',
+        hashHex: 'a'.repeat(64),
+        confirmations: 4,
+        submittedAt: new Date('2026-01-10T08:01:00.000Z'),
+        confirmedAt: new Date('2026-01-10T08:02:00.000Z'),
+        status: 'confirmed',
+      }),
+    },
+    auditEvent: { create: async ({ data }) => data },
+  };
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: {
+      enabled: true,
+      algodServer: 'https://testnet-api.algonode.cloud',
+    },
+    inspectReceipt: async () => ({
+      hashIntegrity: true,
+      noteIntegrity: true,
+      chainConfirmed: true,
+      verified: true,
+      network: 'Algorand TestNet',
+      networkId: 'testnet',
+      explorerUrl: 'https://testnet.explorer.perawallet.app/tx/ALGORAND-TX-1',
+    }),
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.status, 'CONFIRMED');
+  assert.equal(result.chainConfirmed, true);
+  assert.equal(result.noteIntegrity, true);
+  assert.equal(result.txId, 'ALGORAND-TX-1');
+  assert.equal(result.blockHeight, '42');
 });

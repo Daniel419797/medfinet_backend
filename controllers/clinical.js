@@ -42,6 +42,20 @@ async function downloadImmunizationCertificate(req, res, next) {
   }
 }
 
+async function getImmunizationCertificateEvidence(req, res, next) {
+  try {
+    const evidence = await certificateService.evidence(
+      context(req),
+      req.params.id,
+      req.params.immunizationId,
+    );
+    res.set('Cache-Control', 'private, no-store, max-age=0');
+    return res.status(200).json({ success: true, data: evidence });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   issueCredential: handle((req) => credentialService.issue(context(req), req.params.id, req.body), 201),
   issueCredentialsBulk: handle((req) => credentialService.issueBulk(context(req), req.body), 201),
@@ -93,4 +107,5 @@ module.exports = {
   updateAppointmentStatus: handle((req) => service.updateAppointmentStatus(context(req), req.params.appointmentId, req.body)),
   getTimeline: handle((req) => service.getClinicalTimeline(context(req), req.params.id)),
   downloadImmunizationCertificate,
+  getImmunizationCertificateEvidence,
 };
