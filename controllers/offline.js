@@ -9,6 +9,8 @@ function context(req) {
     organizationId: req.organization.id,
     actorSubjectId: req.actorSubjectId,
     role: req.organization.membership.role,
+    membershipId: req.organization.membership.id,
+    scopeMode: req.organization.membership.scopeMode,
     purpose: req.accessPurpose,
     requestId: req.requestId,
   };

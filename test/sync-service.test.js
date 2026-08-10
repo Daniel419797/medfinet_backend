@@ -52,6 +52,37 @@ test('rejects duplicate operation IDs and unsupported operation types', () => {
   );
 });
 
+test('rejects offline immunization submission from a non-clinical role', async () => {
+  let transactionStarted = false;
+  const service = createSyncService({
+    async $transaction() {
+      transactionStarted = true;
+    },
+  });
+
+  await assert.rejects(
+    service.submitBatch(
+      { ...context(), role: 'NUTRITION_WORKER' },
+      'device-1',
+      {
+        clientBatchId: 'batch-client-1',
+        operations: [{
+          clientOperationId: 'operation-client-1',
+          operationType: 'CLINICAL.IMMUNIZATION_RECORD',
+          payload: {
+            childId: 'child-1',
+            vaccineCode: 'BCG',
+            doseNumber: 1,
+            administeredAt: '2026-07-28T10:00:00.000Z',
+          },
+        }],
+      }
+    ),
+    (error) => error.code === 'SYNC_OPERATION_ROLE_DENIED' && error.status === 403
+  );
+  assert.equal(transactionStarted, false);
+});
+
 test('persists an accepted batch, operations, outbox event, and audit evidence', async () => {
   const calls = [];
   const tx = transaction({
@@ -146,7 +177,18 @@ test('processes operations sequentially and reports a partial batch on conflict'
       baseVersion: 2,
     },
   ];
+  let appliedContext;
   const tx = transaction({
+    organizationMembership: {
+      async findUnique() {
+        return {
+          id: 'membership-1',
+          role: 'HEALTH_WORKER',
+          scopeMode: 'GLOBAL',
+          status: 'ACTIVE',
+        };
+      },
+    },
     syncBatch: {
       async updateMany({ where, data }) {
         if (where.status === 'PROCESSING') return { count: 0 };
@@ -157,7 +199,16 @@ test('processes operations sequentially and reports a partial batch on conflict'
         return { count: 0 };
       },
       async findFirst() {
-        return { id: 'batch-1', status: batchStatus, operations };
+        return {
+          id: 'batch-1',
+          status: batchStatus,
+          device: {
+            id: 'device-1',
+            subjectId: 'field-worker-1',
+            status: 'ACTIVE',
+          },
+          operations,
+        };
       },
       async update({ data }) {
         batchStatus = data.status;
@@ -183,7 +234,10 @@ test('processes operations sequentially and reports a partial batch on conflict'
   });
   const service = createSyncService(databaseWithTransaction(tx), {
     handlers: {
-      'APPOINTMENT.SCHEDULE': async () => ({ id: 'appointment-1' }),
+      'APPOINTMENT.SCHEDULE': async (handlerContext) => {
+        appliedContext = handlerContext;
+        return { id: 'appointment-1' };
+      },
       'CLINICAL.GROWTH_RECORD': async () => {
         throw new DomainError(409, 'VERSION_CONFLICT', 'Record changed on the server');
       },
@@ -191,11 +245,19 @@ test('processes operations sequentially and reports a partial batch on conflict'
     now: () => new Date('2026-07-29T01:00:00.000Z'),
   });
 
-  const result = await service.processBatch(context(), 'batch-1');
+  const result = await service.processBatch({
+    ...context(),
+    actorSubjectId: 'system:outbox-worker',
+    role: 'ADMIN',
+    purpose: 'background-processing',
+  }, 'batch-1');
 
   assert.equal(operationState.get('operation-1'), 'APPLIED');
   assert.equal(operationState.get('operation-2'), 'CONFLICT');
   assert.equal(result.status, 'PARTIAL');
+  assert.equal(appliedContext.actorSubjectId, 'field-worker-1');
+  assert.equal(appliedContext.role, 'HEALTH_WORKER');
+  assert.equal(appliedContext.purpose, 'offline-sync');
 });
 
 test('does not process a batch claimed by another worker', async () => {

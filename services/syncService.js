@@ -1,6 +1,7 @@
 const { DomainError } = require('../utils/domainError');
 const { withTenantTransaction } = require('./tenantContext');
 const { requiredText } = require('./identityService');
+const { isClinicalWriteRole } = require('./clinicalAccessPolicy');
 
 const SUPPORTED_OPERATIONS = new Set([
   'APPOINTMENT.SCHEDULE',
@@ -11,6 +12,20 @@ const SUPPORTED_OPERATIONS = new Set([
   'RESPONSE.REFERRAL_CREATE',
 ]);
 const MAX_OPERATION_BYTES = 64 * 1024;
+
+function assertSyncOperationAccess(context, operations) {
+  const denied = operations.find(({ operationType }) => (
+    operationType === 'CLINICAL.IMMUNIZATION_RECORD'
+    && !isClinicalWriteRole(context?.role || context?.actorRole)
+  ));
+  if (denied) {
+    throw new DomainError(
+      403,
+      'SYNC_OPERATION_ROLE_DENIED',
+      'This role is not permitted to synchronize immunization records'
+    );
+  }
+}
 
 function normalizeOperations(operations) {
   if (!Array.isArray(operations) || operations.length < 1 || operations.length > 100) {
@@ -71,6 +86,7 @@ function createSyncService(
   async function submitBatch(context, deviceId, input) {
     const clientBatchId = requiredText(input.clientBatchId, 'clientBatchId', 120);
     const operations = normalizeOperations(input.operations);
+    assertSyncOperationAccess(context, operations);
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
       const device = await transaction.fieldDevice.findFirst({
         where: {
@@ -171,13 +187,16 @@ function createSyncService(
         if (claim.count !== 1) {
           const batch = await transaction.syncBatch.findFirst({
             where: { id: batchId, organizationId: context.organizationId },
-            include: { operations: true },
+            include: { device: true, operations: true },
           });
           return { batch, claimed: false };
         }
         const batch = await transaction.syncBatch.findFirst({
           where: { id: batchId, organizationId: context.organizationId },
-          include: { operations: { orderBy: { createdAt: 'asc' } } },
+          include: {
+            device: true,
+            operations: { orderBy: { createdAt: 'asc' } },
+          },
         });
         return { batch, claimed: true };
       }
@@ -186,10 +205,68 @@ function createSyncService(
     if (!claimed) throw new DomainError(404, 'SYNC_BATCH_NOT_FOUND', 'Sync batch not found');
     if (!claimResult.claimed) return claimed;
 
-    for (const operation of claimed.operations.filter(({ status }) => status === 'PENDING')) {
-      await processOperation(context, operation);
+    const pendingOperations = claimed.operations.filter(({ status }) => status === 'PENDING');
+    let actorContext;
+    try {
+      actorContext = await resolveBatchActorContext(context, claimed);
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      for (const operation of pendingOperations) {
+        await finalizeOperation(context, operation.id, {
+          status: 'REJECTED',
+          errorCode: error.code || 'SYNC_ACTOR_ACCESS_DENIED',
+          errorMessage: error.message,
+        });
+      }
+      return finalizeBatch(context, batchId);
     }
 
+    for (const operation of pendingOperations) {
+      await processOperation(actorContext, operation);
+    }
+
+    return finalizeBatch(context, batchId);
+  }
+
+  async function resolveBatchActorContext(context, batch) {
+    if (!batch.device || batch.device.status !== 'ACTIVE') {
+      throw new DomainError(
+        403,
+        'SYNC_ACTOR_ACCESS_DENIED',
+        'The submitting field device is no longer active'
+      );
+    }
+    const membership = await withTenantTransaction(
+      database,
+      context.organizationId,
+      (transaction) => transaction.organizationMembership.findUnique({
+        where: {
+          organizationId_subjectId: {
+            organizationId: context.organizationId,
+            subjectId: batch.device.subjectId,
+          },
+        },
+      })
+    );
+    if (!membership || membership.status !== 'ACTIVE') {
+      throw new DomainError(
+        403,
+        'SYNC_ACTOR_ACCESS_DENIED',
+        'The submitting worker no longer has an active organization membership'
+      );
+    }
+    return {
+      organizationId: context.organizationId,
+      actorSubjectId: batch.device.subjectId,
+      role: membership.role,
+      membershipId: membership.id,
+      scopeMode: membership.scopeMode,
+      purpose: 'offline-sync',
+      requestId: context.requestId,
+    };
+  }
+
+  async function finalizeBatch(context, batchId) {
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
       const operations = await transaction.syncOperation.findMany({
         where: { syncBatchId: batchId, organizationId: context.organizationId },
@@ -251,6 +328,15 @@ function createSyncService(
   }
 
   async function processOperation(context, operation) {
+    try {
+      assertSyncOperationAccess(context, [operation]);
+    } catch (error) {
+      return finalizeOperation(context, operation.id, {
+        status: 'REJECTED',
+        errorCode: error.code,
+        errorMessage: error.message,
+      });
+    }
     const handler = handlers[operation.operationType];
     if (!handler) {
       return finalizeOperation(context, operation.id, {
@@ -301,6 +387,7 @@ function createSyncService(
 }
 
 module.exports = {
+  assertSyncOperationAccess,
   createSyncService,
   normalizeOperations,
   SUPPORTED_OPERATIONS,

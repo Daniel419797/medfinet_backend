@@ -13,6 +13,15 @@ const {
   createClinicalTimelineService,
 } = require('./clinicalTimelineService');
 const { assertResourceScope } = require('./resourceScopeService');
+const { EVENT_TYPES } = require('./blockchain/eventTypes');
+const { assertClinicalWriteAccess } = require('./clinicalAccessPolicy');
+const {
+  duplicateImmunizationError,
+  immunizationDeduplicationKey,
+  isDeduplicationConstraintError,
+  recordedImmunizationAnchorId,
+  withoutImmunizationIntegrityFields,
+} = require('./immunizationIntegrity');
 
 function createClinicalService(prismaClient) {
   const database = prismaClient || require('../utils/prisma').prisma;
@@ -28,13 +37,17 @@ function createClinicalService(prismaClient) {
   }
 
   async function recordImmunization(context, childId, input) {
+    assertClinicalWriteAccess(context);
+    const vaccineCode = requiredText(input.vaccineCode, 'vaccineCode', 60).toUpperCase();
+    const doseNumber = boundedInteger(input.doseNumber, 'doseNumber', { max: 20 });
     const data = {
       organizationId: context.organizationId,
       childId,
-      vaccineCode: requiredText(input.vaccineCode, 'vaccineCode', 60).toUpperCase(),
-      doseNumber: boundedInteger(input.doseNumber, 'doseNumber', { max: 20 }),
+      vaccineCode,
+      doseNumber,
       administeredAt: timestamp(input.administeredAt, 'administeredAt', { future: false }),
       administeringSubjectId: context.actorSubjectId,
+      deduplicationKey: immunizationDeduplicationKey(childId, vaccineCode, doseNumber),
       ...(input.facilityId ? { facilityId: input.facilityId } : {}),
       ...(input.programmeId ? { programmeId: input.programmeId } : {}),
       ...(input.lotNumber ? { lotNumber: requiredText(input.lotNumber, 'lotNumber', 100) } : {}),
@@ -45,36 +58,80 @@ function createClinicalService(prismaClient) {
         ? { sourceOperationId: requiredText(input.sourceOperationId, 'sourceOperationId', 120) }
         : {}),
     };
-    return withTenantTransaction(database, context.organizationId, async (transaction) => {
-      if (data.sourceOperationId) {
-        const replay = await transaction.immunizationRecord.findUnique({
-          where: {
-            organizationId_sourceOperationId: {
-              organizationId: context.organizationId,
-              sourceOperationId: data.sourceOperationId,
+    try {
+      return await withTenantTransaction(database, context.organizationId, async (transaction) => {
+        if (data.sourceOperationId) {
+          const replay = await transaction.immunizationRecord.findUnique({
+            where: {
+              organizationId_sourceOperationId: {
+                organizationId: context.organizationId,
+                sourceOperationId: data.sourceOperationId,
+              },
             },
-          },
-        });
-        if (replay) {
-          if (replay.childId !== childId) {
-            throw new DomainError(
-              409,
-              'IDEMPOTENCY_KEY_REUSED',
-              'sourceOperationId was already used for another child'
-            );
+          });
+          if (replay) {
+            if (replay.childId !== childId) {
+              throw new DomainError(
+                409,
+                'IDEMPOTENCY_KEY_REUSED',
+                'sourceOperationId was already used for another child'
+              );
+            }
+            return withoutImmunizationIntegrityFields(replay);
           }
-          return replay;
         }
-      }
-      await assertResourceScope(transaction, context, {
-        facilityId: data.facilityId,
-        programmeId: data.programmeId,
+        await assertResourceScope(transaction, context, {
+          facilityId: data.facilityId,
+          programmeId: data.programmeId,
+        });
+        await requireChild(transaction, context, childId);
+        const duplicate = await transaction.immunizationRecord.findFirst({
+          where: {
+            organizationId: context.organizationId,
+            childId,
+            vaccineCode,
+            doseNumber,
+            status: { in: ['ACTIVE', 'AMENDED'] },
+          },
+          select: { id: true },
+        });
+        if (duplicate) throw duplicateImmunizationError(duplicate.id);
+
+        const record = await transaction.immunizationRecord.create({ data });
+        const anchor = EVENT_TYPES.IMMUNIZATION_RECORD;
+        await Promise.all([
+          transaction.auditEvent.create({
+            data: audit(
+              context,
+              'immunization.recorded',
+              'immunization',
+              record.id,
+              { childId }
+            ),
+          }),
+          transaction.outboxEvent.create({
+            data: {
+              organizationId: context.organizationId,
+              eventType: 'BLOCKCHAIN_ANCHOR_REQUESTED',
+              aggregateType: 'blockchain-anchor',
+              aggregateId: record.id,
+              idempotencyKey: `blockchain:${anchor.code}:${record.id}`,
+              payload: {
+                eventCode: anchor.code,
+                anchorId: recordedImmunizationAnchorId(record),
+                tenantId: context.organizationId,
+              },
+            },
+          }),
+        ]);
+        return withoutImmunizationIntegrityFields(record);
       });
-      await requireChild(transaction, context, childId);
-      const record = await transaction.immunizationRecord.create({ data });
-      await transaction.auditEvent.create({ data: audit(context, 'immunization.recorded', 'immunization', record.id, { childId }) });
-      return record;
-    });
+    } catch (error) {
+      if (isDeduplicationConstraintError(error)) {
+        throw duplicateImmunizationError();
+      }
+      throw error;
+    }
   }
 
   async function recordGrowth(context, childId, input) {

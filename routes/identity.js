@@ -24,6 +24,10 @@ const ussdController = require('../controllers/ussd');
 const operationsController = require('../controllers/operations');
 const aiController = require('../controllers/ai');
 const { createCaregiverChildAccessMiddleware } = require('../middleware/caregiverChildAccess');
+const {
+  CLINICAL_READ_ROLES,
+  CLINICAL_WRITE_ROLES,
+} = require('../services/clinicalAccessPolicy');
 
 const router = Router();
 const readAccess = createOrganizationAccessMiddleware();
@@ -31,7 +35,7 @@ const childReadAccess = createOrganizationAccessMiddleware({
   allowedRoles: ['OWNER', 'ADMIN', 'HEALTH_WORKER', 'NUTRITION_WORKER', 'EMERGENCY_COORDINATOR', 'CAREGIVER'],
 });
 const clinicalReadAccess = createOrganizationAccessMiddleware({
-  allowedRoles: ['HEALTH_WORKER', 'CAREGIVER'],
+  allowedRoles: CLINICAL_READ_ROLES,
 });
 const appointmentReadAccess = createOrganizationAccessMiddleware({
   allowedRoles: [
@@ -59,7 +63,7 @@ const fieldDeviceAccess = createOrganizationAccessMiddleware({
   allowedRoles: ['HEALTH_WORKER', 'NUTRITION_WORKER', 'EMERGENCY_COORDINATOR'],
 });
 const identityWriteAccess = createOrganizationAccessMiddleware({
-  allowedRoles: ['OWNER', 'ADMIN', 'HEALTH_WORKER'],
+  allowedRoles: CLINICAL_WRITE_ROLES,
 });
 const administrationAccess = createOrganizationAccessMiddleware({
   allowedRoles: ['OWNER', 'ADMIN'],
