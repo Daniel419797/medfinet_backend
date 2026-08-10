@@ -22,6 +22,10 @@ const { requestContext } = require('./middleware/requestContext');
 const { createRateLimitMiddleware } = require('./middleware/rateLimit');
 const { httpLogger } = require('./middleware/httpLogger');
 const { logger } = require('./utils/logger');
+const {
+  embeddedOutboxWorkerEnabled,
+  startOutboxWorker,
+} = require('./scripts/process-outbox');
 
 const app = express();
 app.set('trust proxy', config.security.trustProxyHops);
@@ -147,9 +151,28 @@ app.use('*', (req, res) => {
 
 // Start server
 if (require.main === module) {
+  const runEmbeddedWorker = embeddedOutboxWorkerEnabled();
   app.listen(config.port, () => {
-    logger.info('api.started', { port: config.port });
+    logger.info('api.started', {
+      port: config.port,
+      embeddedOutboxWorker: runEmbeddedWorker,
+    });
   });
+
+  if (runEmbeddedWorker) {
+    logger.info('outbox-worker.embedded.started', {
+      workerMode: 'web-process',
+    });
+    void startOutboxWorker().catch((error) => {
+      logger.error('outbox-worker.embedded.failed', {
+        errorName: error.name,
+        errorCode: error.code || null,
+      });
+      // Do not leave Render serving traffic with a dead embedded worker. A
+      // non-zero exit lets the platform restart the service and resume the queue.
+      process.exit(1);
+    });
+  }
 }
 
 module.exports = app;

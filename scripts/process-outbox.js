@@ -30,10 +30,10 @@ const { createCertificateNftService } = require('../services/certificateNftServi
 const { createCertificateNftQueueService } = require('../services/certificateNftQueueService');
 const { getNetworkConfig } = require('../services/blockchain/networkRegistry');
 
-const runOnce = process.argv.includes('--once');
 const workerId = `${os.hostname()}:${process.pid}`;
 const pollIntervalMs = 1000;
 let stopping = false;
+let runningPromise = null;
 let lastRateLimitCleanupAt = 0;
 let lastNfcCleanupAt = 0;
 
@@ -217,27 +217,61 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function main() {
+function embeddedOutboxWorkerEnabled(environment = process.env) {
+  const value = String(environment.RUN_OUTBOX_WORKER || '').trim().toLowerCase();
+  if (!value) return false;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error('RUN_OUTBOX_WORKER must be true or false');
+}
+
+async function runLoop({ once = false } = {}) {
   do {
     const processed = await processAvailableEvents();
-    if (runOnce || stopping) break;
+    if (once || stopping) break;
     if (processed === 0) await wait(pollIntervalMs);
   } while (!stopping);
 }
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    stopping = true;
+function startOutboxWorker(options = {}) {
+  if (runningPromise) return runningPromise;
+  stopping = false;
+  runningPromise = runLoop(options).finally(() => {
+    runningPromise = null;
   });
+  return runningPromise;
 }
 
-main()
-  .catch((error) => {
+function stopOutboxWorker() {
+  stopping = true;
+}
+
+async function runStandalone() {
+  const once = process.argv.includes('--once');
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, stopOutboxWorker);
+  }
+
+  try {
+    await startOutboxWorker({ once });
+  } catch (error) {
     logger.error('outbox-worker.failed', {
       errorName: error.name,
+      errorCode: error.code || null,
     });
     process.exitCode = 1;
-  })
-  .finally(async () => {
+  } finally {
     await prisma.$disconnect();
-  });
+  }
+}
+
+if (require.main === module) {
+  void runStandalone();
+}
+
+module.exports = {
+  embeddedOutboxWorkerEnabled,
+  processAvailableEvents,
+  startOutboxWorker,
+  stopOutboxWorker,
+};
