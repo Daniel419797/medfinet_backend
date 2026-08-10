@@ -35,7 +35,7 @@ function transaction(facility = {}) {
   };
 }
 
-test('new vaccination snapshot requires an active registered facility and complete certificate location', async () => {
+test('new vaccination snapshot requires complete location evidence and rejects inactive registered facilities', async () => {
   await assert.rejects(
     buildInitialImmunizationSnapshot(transaction(), context(), {
       state: 'Delta',
@@ -67,6 +67,32 @@ test('new vaccination snapshot requires an active registered facility and comple
     }),
     (error) => error.code === 'VALIDATION_ERROR'
   );
+});
+
+test('records a complete outreach site without fabricating a facility reference', async () => {
+  const snapshot = await buildInitialImmunizationSnapshot(
+    transaction(),
+    context(),
+    {
+      facilityName: 'Ekpan Outreach Post',
+      state: 'Delta',
+      lga: 'Uvwie',
+      ward: 'Ekpan',
+      vaccinatorMode: 'OTHER',
+      vaccinatorName: 'Nurse Ada Okafor',
+    }
+  );
+
+  assert.deepEqual(snapshot, {
+    facilityId: null,
+    facilityName: 'Ekpan Outreach Post',
+    state: 'Delta',
+    lga: 'Uvwie',
+    ward: 'Ekpan',
+    vaccinatorName: 'Nurse Ada Okafor',
+    vaccinatorSubjectId: null,
+    recordedBySubjectId: 'worker-1',
+  });
 });
 
 test('SELF vaccination snapshots preserve recorder and actual vaccinator separately', async () => {
