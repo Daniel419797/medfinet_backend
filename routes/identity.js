@@ -90,6 +90,12 @@ const nfcScanRateLimit = createRateLimitMiddleware({
   windowMs: 60 * 1000,
   key: (req) => req.user?.id || req.user?.sub || req.ip,
 });
+const certificateEvidenceRateLimit = createRateLimitMiddleware({
+  scope: 'immunization-certificate-evidence',
+  limit: 30,
+  windowMs: 60 * 1000,
+  key: (req) => `${req.actorSubjectId}:${req.organization.id}`,
+});
 const childIdentityDisclosure = createConsentAccessMiddleware({
   scopes: [
     { category: 'IDENTITY', access: 'READ' },
@@ -449,6 +455,15 @@ router.get(
   caregiverChildAccess,
   immunizationCertificateDisclosure,
   clinicalController.downloadImmunizationCertificate,
+);
+router.get(
+  '/children/:id/immunizations/:immunizationId/certificate/evidence',
+  auth,
+  clinicalReadAccess,
+  caregiverChildAccess,
+  immunizationCertificateDisclosure,
+  certificateEvidenceRateLimit,
+  clinicalController.getImmunizationCertificateEvidence,
 );
 router.post(
   '/children/:id/ai/timeline-summary',

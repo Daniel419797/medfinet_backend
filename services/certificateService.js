@@ -1,7 +1,14 @@
-const crypto = require('node:crypto');
 const { renderCertificate } = require('../controllers/certificate/certificate');
 const { DomainError } = require('../utils/domainError');
+const { logger } = require('../utils/logger');
+const AnchorReceipt = require('./blockchain/AnchorReceipt');
+const { EVENT_TYPES } = require('./blockchain/eventTypes');
+const { inspectAnchorReceipt } = require('./blockchain/receiptVerification');
 const { audit } = require('./clinicalValidation');
+const {
+  amendedImmunizationAnchorId,
+  recordedImmunizationAnchorId,
+} = require('./immunizationIntegrity');
 const { assertResourceScope } = require('./resourceScopeService');
 const { withTenantTransaction } = require('./tenantContext');
 
@@ -13,77 +20,144 @@ function safeFilenamePart(value) {
     .slice(0, 60) || 'record';
 }
 
-function certificateFingerprint(record) {
-  const version = record.updatedAt instanceof Date
-    ? record.updatedAt.toISOString()
-    : String(record.updatedAt || record.createdAt || '');
-  return crypto
-    .createHash('sha256')
-    .update([
-      record.organizationId,
-      record.childId,
-      record.id,
-      record.vaccineCode,
-      record.doseNumber,
-      record.administeredAt instanceof Date
-        ? record.administeredAt.toISOString()
-        : String(record.administeredAt),
-      version,
-    ].join(':'))
-    .digest('hex');
+function proofMaterial(record) {
+  const amendment = record.status === 'AMENDED' ? record.amendments?.[0] : null;
+  const event = amendment
+    ? EVENT_TYPES.IMMUNIZATION_AMEND
+    : EVENT_TYPES.IMMUNIZATION_RECORD;
+  const anchorId = amendment
+    ? amendedImmunizationAnchorId({
+        amendmentId: amendment.id,
+        recordId: record.id,
+        previous: amendment.previousData,
+        replacement: amendment.replacementData,
+        reason: amendment.reason,
+      })
+    : recordedImmunizationAnchorId(record);
+  return {
+    anchorId,
+    aggregateId: amendment?.id || record.id,
+    eventCode: event.code,
+    fingerprint: anchorId.slice(anchorId.lastIndexOf(':') + 1),
+  };
 }
 
-function createCertificateService(prismaClient, renderer = renderCertificate) {
+function certificateFingerprint(record) {
+  return proofMaterial(record).fingerprint;
+}
+
+function anchorOutboxData(record, proof = proofMaterial(record)) {
+  return {
+    organizationId: record.organizationId,
+    eventType: 'BLOCKCHAIN_ANCHOR_REQUESTED',
+    aggregateType: 'blockchain-anchor',
+    aggregateId: proof.aggregateId,
+    idempotencyKey: `blockchain:${proof.eventCode}:${proof.aggregateId}`,
+    payload: {
+      eventCode: proof.eventCode,
+      anchorId: proof.anchorId,
+      tenantId: record.organizationId,
+    },
+  };
+}
+
+function networkLabel(settings) {
+  if (settings.networkName) return settings.networkName;
+  let hostname;
+  try {
+    hostname = new URL(settings.algodServer).hostname.toLowerCase();
+  } catch {
+    return 'Algorand';
+  }
+  if (hostname.includes('testnet')) return 'Algorand TestNet';
+  if (hostname.includes('mainnet')) return 'Algorand MainNet';
+  return 'Algorand';
+}
+
+async function defaultInspectReceipt(receipt, settings) {
+  const AlgorandAdapter = require('./blockchain/adapters/AlgorandAdapter');
+  return inspectAnchorReceipt(
+    AnchorReceipt.fromDatabase(receipt),
+    new AlgorandAdapter(settings),
+  );
+}
+
+function createCertificateService(
+  prismaClient,
+  renderer = renderCertificate,
+  options = {},
+) {
   const database = prismaClient || require('../utils/prisma').prisma;
+
+  async function findRecord(transaction, context, childId, immunizationId) {
+    const record = await transaction.immunizationRecord.findFirst({
+      where: {
+        id: immunizationId,
+        childId,
+        organizationId: context.organizationId,
+        status: { in: ['ACTIVE', 'AMENDED'] },
+        child: { status: 'ACTIVE' },
+      },
+      include: {
+        child: {
+          select: {
+            firstName: true,
+            lastName: true,
+            dateOfBirth: true,
+            sex: true,
+            medfinetId: true,
+          },
+        },
+        facility: {
+          select: {
+            name: true,
+            administrativeArea: true,
+          },
+        },
+        amendments: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            reason: true,
+            previousData: true,
+            replacementData: true,
+          },
+        },
+      },
+    });
+
+    if (!record) {
+      throw new DomainError(
+        404,
+        'IMMUNIZATION_CERTIFICATE_NOT_FOUND',
+        'Immunization record not found',
+      );
+    }
+
+    await assertResourceScope(transaction, context, {
+      facilityId: record.facilityId,
+      programmeId: record.programmeId,
+    });
+    return record;
+  }
 
   async function create(context, childId, immunizationId) {
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
-      const record = await transaction.immunizationRecord.findFirst({
-        where: {
-          id: immunizationId,
-          childId,
-          organizationId: context.organizationId,
-          status: 'ACTIVE',
-          child: { status: 'ACTIVE' },
-        },
-        include: {
-          child: {
-            select: {
-              firstName: true,
-              lastName: true,
-              dateOfBirth: true,
-              sex: true,
-              medfinetId: true,
-            },
-          },
-          facility: {
-            select: {
-              name: true,
-              administrativeArea: true,
-            },
-          },
-        },
-      });
+      const record = await findRecord(
+        transaction,
+        context,
+        childId,
+        immunizationId,
+      );
 
-      if (!record) {
-        throw new DomainError(
-          404,
-          'IMMUNIZATION_CERTIFICATE_NOT_FOUND',
-          'Active immunization record not found',
-        );
-      }
-
-      await assertResourceScope(transaction, context, {
-        facilityId: record.facilityId,
-        programmeId: record.programmeId,
-      });
-
-      const fingerprint = certificateFingerprint(record);
+      const proof = proofMaterial(record);
       const verificationValue = JSON.stringify({
         type: 'MEDFINET_VACCINATION_CERTIFICATE',
-        version: 1,
+        version: 2,
         recordId: record.id,
-        fingerprint,
+        fingerprint: proof.fingerprint,
+        algorandAnchorId: proof.anchorId,
       });
       const buffer = await renderer({
         childName: `${record.child.firstName} ${record.child.lastName}`,
@@ -102,7 +176,7 @@ function createCertificateService(prismaClient, renderer = renderCertificate) {
           'immunization-certificate.downloaded',
           'immunization',
           record.id,
-          { childId, fingerprint },
+          { childId, fingerprint: proof.fingerprint, anchorId: proof.anchorId },
         ),
       });
 
@@ -117,7 +191,119 @@ function createCertificateService(prismaClient, renderer = renderCertificate) {
     });
   }
 
-  return { create };
+  async function evidence(context, childId, immunizationId) {
+    const settings = options.algorand || require('../config').algorand;
+    const proof = await withTenantTransaction(
+      database,
+      context.organizationId,
+      async (transaction) => {
+        const record = await findRecord(
+          transaction,
+          context,
+          childId,
+          immunizationId,
+        );
+        const material = proofMaterial(record);
+        const { anchorId, fingerprint } = material;
+        const receipt = await transaction.anchorReceipt.findUnique({
+          where: { anchorId },
+        });
+        let queued = false;
+        if (settings.enabled && !receipt) {
+          const outboxData = anchorOutboxData(record, material);
+          const existing = await transaction.outboxEvent.findUnique({
+            where: {
+              organizationId_idempotencyKey: {
+                organizationId: context.organizationId,
+                idempotencyKey: outboxData.idempotencyKey,
+              },
+            },
+          });
+          if (!existing) {
+            await transaction.outboxEvent.upsert({
+              where: {
+                organizationId_idempotencyKey: {
+                  organizationId: context.organizationId,
+                  idempotencyKey: outboxData.idempotencyKey,
+                },
+              },
+              create: outboxData,
+              update: {},
+            });
+            queued = true;
+          } else if (existing.status === 'FAILED') {
+            await transaction.outboxEvent.update({
+              where: { id: existing.id },
+              data: {
+                status: 'PENDING',
+                attempts: 0,
+                nextAttemptAt: new Date(),
+                lockedAt: null,
+                lockedBy: null,
+                publishedAt: null,
+                lastError: null,
+              },
+            });
+            queued = true;
+          }
+        }
+        await transaction.auditEvent.create({
+          data: audit(
+            context,
+            'immunization-certificate.evidence-viewed',
+            'immunization',
+            record.id,
+            { childId, fingerprint, anchorId },
+          ),
+        });
+        return { anchorId, fingerprint, receipt, queued };
+      },
+    );
+
+    const base = {
+      recordId: immunizationId,
+      fingerprint: proof.fingerprint,
+      anchorId: proof.anchorId,
+      queued: proof.queued,
+      network: settings.enabled ? networkLabel(settings) : null,
+      txId: proof.receipt?.txId || null,
+      blockHeight: proof.receipt?.blockHeight == null
+        ? null
+        : String(proof.receipt.blockHeight),
+      confirmedAt: proof.receipt?.confirmedAt || null,
+      explorerUrl: null,
+      hashIntegrity: null,
+      noteIntegrity: null,
+      chainConfirmed: null,
+    };
+    if (!settings.enabled) return { ...base, status: 'DISABLED' };
+    if (!proof.receipt) return { ...base, status: 'PENDING' };
+
+    try {
+      const inspected = await (options.inspectReceipt || defaultInspectReceipt)(
+        proof.receipt,
+        settings,
+      );
+      return {
+        ...base,
+        ...inspected,
+        status: inspected.verified
+          ? 'CONFIRMED'
+          : inspected.hashIntegrity && inspected.noteIntegrity
+            ? 'UNCONFIRMED'
+            : 'MISMATCH',
+      };
+    } catch (error) {
+      logger.warn('certificate.algorand-proof-unavailable', {
+        anchorId: proof.anchorId,
+        errorType: error?.name || 'Error',
+        errorCode: error?.code || null,
+      });
+      return { ...base, status: 'UNAVAILABLE' };
+    }
+  }
+
+  return { create, evidence };
 }
 
 module.exports = {

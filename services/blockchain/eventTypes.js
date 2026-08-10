@@ -28,6 +28,21 @@ function isValidEventCode(code) {
   return Number.isInteger(code) && Boolean(EVENT_BY_CODE[code]);
 }
 
+function noteFromHash(eventCode, hashHex) {
+  if (!isValidEventCode(eventCode)) {
+    throw new Error(`Invalid event code: ${eventCode}`);
+  }
+  const hash = Buffer.from(String(hashHex || ''), 'hex');
+  if (hash.length !== HASH_BYTES) {
+    throw new Error('Anchor hash must be exactly 32 bytes');
+  }
+  const note = Buffer.alloc(VERSION_BYTES + TYPE_BYTE + HASH_BYTES);
+  note.writeUInt16BE(NOTE_VERSION, 0);
+  note[VERSION_BYTES] = eventCode;
+  hash.copy(note, VERSION_BYTES + TYPE_BYTE);
+  return note;
+}
+
 function buildNote(eventCode, tenantId, anchorId) {
   if (!isValidEventCode(eventCode)) {
     throw new Error(`Invalid event code: ${eventCode}`);
@@ -37,10 +52,7 @@ function buildNote(eventCode, tenantId, anchorId) {
   const hashInput = `${tenantId}|${anchorId}|${timestamp}|${nonce.toString('hex')}`;
   const hash = crypto.createHash('sha256').update(hashInput).digest();
 
-  const note = Buffer.alloc(VERSION_BYTES + TYPE_BYTE + HASH_BYTES);
-  note.writeUInt16BE(NOTE_VERSION, 0);
-  note[VERSION_BYTES] = eventCode;
-  hash.copy(note, VERSION_BYTES + TYPE_BYTE);
+  const note = noteFromHash(eventCode, hash.toString('hex'));
 
   return { note, timestamp, nonce: nonce.toString('hex'), hash: hash.toString('hex') };
 }
@@ -60,6 +72,7 @@ module.exports = {
   EVENT_TYPES,
   EVENT_BY_CODE,
   isValidEventCode,
+  noteFromHash,
   buildNote,
   verifyHash,
 };

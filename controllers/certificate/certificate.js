@@ -74,6 +74,17 @@ async function renderCertificate(data) {
       <text x="350" y="894" class="value">${escapeXml(shortValue(fields.vaccinator))}</text>
       <text x="350" y="946" class="value">${escapeXml(shortValue(fields.vaccine))}</text>
       ${verificationValue ? '<rect x="344" y="984" width="164" height="154" fill="#ffffff" />' : ''}
+      ${verificationValue ? `
+        <rect x="180" y="1148" width="493" height="48" fill="#ffffff" opacity="0.96" />
+        <text x="426" y="1168" fill="#064e3b" font-family="Arial, Helvetica, sans-serif"
+              font-size="13" font-weight="800" text-anchor="middle" letter-spacing="1">
+          SCAN TO VERIFY THE ALGORAND PROOF
+        </text>
+        <text x="426" y="1187" fill="#334155" font-family="Arial, Helvetica, sans-serif"
+              font-size="11" text-anchor="middle">
+          Only a cryptographic fingerprint is anchored; no medical data is public.
+        </text>
+      ` : ''}
       <g transform="rotate(-18 426 760)" opacity="0.16">
         <text x="426" y="742" fill="#8b1a1a" font-family="Arial, Helvetica, sans-serif"
               font-size="92" font-weight="800" text-anchor="middle">DEMO</text>

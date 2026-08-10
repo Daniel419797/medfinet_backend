@@ -1,6 +1,7 @@
-const { buildNote, verifyHash, EVENT_BY_CODE } = require('./eventTypes');
+const { buildNote, EVENT_BY_CODE } = require('./eventTypes');
 const AnchorReceipt = require('./AnchorReceipt');
 const AnchorCircuitBreaker = require('./AnchorCircuitBreaker');
+const { inspectAnchorReceipt } = require('./receiptVerification');
 
 class BlockchainAnchorService {
   constructor(adapter, receiptStore, options = {}) {
@@ -53,10 +54,16 @@ class BlockchainAnchorService {
   async verifyAnchor(eventCode, anchorId, tenantId, receipt) {
     if (!this._enabled) return false;
     if (!receipt) return false;
-    const ok = verifyHash(eventCode, tenantId, anchorId, receipt.timestamp, receipt.nonce, receipt.hash);
-    if (!ok) return false;
-    const tx = await this._adapter.getTransaction(receipt.txId);
-    return tx !== null && tx.confirmed === true;
+    if (
+      receipt.eventCode !== eventCode
+      || receipt.anchorId !== anchorId
+      || receipt.tenantId !== tenantId
+    ) return false;
+    try {
+      return (await inspectAnchorReceipt(receipt, this._adapter)).verified;
+    } catch {
+      return false;
+    }
   }
 
   async getReceipt(anchorId) {
