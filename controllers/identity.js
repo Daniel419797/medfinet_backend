@@ -1,3 +1,4 @@
+const { DomainError } = require('../utils/domainError');
 const { createIdentityService } = require('../services/identityService');
 const { resolveSubjectId } = require('../middleware/organizationAccess');
 const {
@@ -17,7 +18,12 @@ const identityService = createIdentityService();
 const amendmentService = createChildIdentityAmendmentService();
 const identifierService = createChildIdentifierService();
 const caregiverPortalService = createCaregiverPortalService();
-const identityProviderAdminService = createIdentityProviderAdminService();
+let identityProviderAdminService;
+
+function accountResolver() {
+  identityProviderAdminService ||= createIdentityProviderAdminService();
+  return identityProviderAdminService;
+}
 
 function contextFromRequest(req) {
   return {
@@ -93,6 +99,13 @@ async function getMyCaregiverProfile(req, res, next) {
 
 async function createCaregiver(req, res, next) {
   try {
+    if (req.body.subjectId) {
+      throw new DomainError(
+        400,
+        'VERIFIED_PARENT_CONNECTION_REQUIRED',
+        'Portal access cannot be attached through caregiver registration. Use the verified Connect parent account workflow instead.'
+      );
+    }
     const caregiver = await identityService.createCaregiver(contextFromRequest(req), req.body);
     return res.status(201).json({ success: true, data: caregiver });
   } catch (error) {
@@ -102,7 +115,7 @@ async function createCaregiver(req, res, next) {
 
 async function connectParent(req, res, next) {
   try {
-    const account = await identityProviderAdminService.resolveVerifiedAccount({
+    const account = await accountResolver().resolveVerifiedAccount({
       accountId: req.body.accountId,
       email: req.body.accountEmail,
     });
