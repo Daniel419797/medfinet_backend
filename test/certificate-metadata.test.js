@@ -5,6 +5,7 @@ const test = require('node:test');
 const {
   buildAmendedImmunizationSnapshot,
   buildInitialImmunizationSnapshot,
+  saveFacilityProfile,
   saveImmunizationSnapshot,
   snapshotForEvidence,
 } = require('../services/certificateMetadataService');
@@ -101,6 +102,7 @@ test('SELF vaccination snapshots preserve recorder and actual vaccinator separat
     context(),
     {
       facilityId: 'facility-1',
+      facilityName: 'Dennis Primary Health Centre',
       state: 'Delta',
       lga: 'Uvwie',
       ward: 'Ekpan',
@@ -126,6 +128,7 @@ test('OTHER vaccinator keeps the recorder identity but does not misattribute the
     context(),
     {
       facilityId: 'facility-1',
+      facilityName: 'Dennis Primary Health Centre',
       state: 'Delta',
       lga: 'Uvwie',
       ward: 'Ekpan',
@@ -137,6 +140,21 @@ test('OTHER vaccinator keeps the recorder identity but does not misattribute the
   assert.equal(snapshot.vaccinatorName, 'Nurse Ada Okafor');
   assert.equal(snapshot.vaccinatorSubjectId, null);
   assert.equal(snapshot.recordedBySubjectId, 'worker-1');
+});
+
+test('explicit invalid vaccinator mode is rejected instead of silently defaulting to SELF', async () => {
+  await assert.rejects(
+    buildInitialImmunizationSnapshot(transaction(), context(), {
+      facilityId: 'facility-1',
+      facilityName: 'Dennis Primary Health Centre',
+      state: 'Delta',
+      lga: 'Uvwie',
+      ward: 'Ekpan',
+      vaccinatorMode: '',
+      vaccinatorName: 'Worker One',
+    }),
+    (error) => error.code === 'VALIDATION_ERROR'
+  );
 });
 
 test('offline SELF payload may supply the authenticated worker display name without changing subject attribution', async () => {
@@ -159,7 +177,7 @@ test('offline SELF payload may supply the authenticated worker display name with
   assert.equal(snapshot.recordedBySubjectId, 'worker-1');
 });
 
-test('legacy amendment does not invent State, LGA or Ward from the current facility profile', async () => {
+test('legacy amendment does not invent facility name, State, LGA or Ward from the current facility profile', async () => {
   const existingRecord = {
     id: 'immunization-legacy',
     organizationId: 'org-1',
@@ -174,6 +192,9 @@ test('legacy amendment does not invent State, LGA or Ward from the current facil
       existingRecord,
       {
         facilityId: 'facility-1',
+        state: 'Historical State',
+        lga: 'Historical LGA',
+        ward: 'Historical Ward',
         vaccinatorMode: 'OTHER',
         vaccinatorName: 'Verified Historical Nurse',
       },
@@ -188,6 +209,7 @@ test('legacy amendment does not invent State, LGA or Ward from the current facil
     existingRecord,
     {
       facilityId: 'facility-1',
+      facilityName: 'Dennis Primary Health Centre',
       state: 'Delta',
       lga: 'Uvwie',
       ward: 'Ekpan',
@@ -201,6 +223,36 @@ test('legacy amendment does not invent State, LGA or Ward from the current facil
   assert.equal(snapshot.state, 'Delta');
   assert.equal(snapshot.vaccinatorName, 'Verified Historical Nurse');
   assert.equal(snapshot.recordedBySubjectId, 'original-recorder');
+});
+
+test('tenant-conflicting certificate upserts fail instead of returning undefined', async () => {
+  const rawStore = {
+    async $queryRawUnsafe() {
+      return [];
+    },
+  };
+  await assert.rejects(
+    saveFacilityProfile(rawStore, context(), 'facility-1', {
+      state: 'Delta',
+      lga: 'Uvwie',
+      ward: 'Ekpan',
+    }),
+    (error) => error.code === 'FACILITY_PROFILE_TENANT_CONFLICT' && error.status === 409
+  );
+
+  await assert.rejects(
+    saveImmunizationSnapshot(rawStore, context(), 'immunization-1', {
+      facilityId: 'facility-1',
+      facilityName: 'Dennis Primary Health Centre',
+      state: 'Delta',
+      lga: 'Uvwie',
+      ward: 'Ekpan',
+      vaccinatorName: 'Worker One',
+      vaccinatorSubjectId: 'worker-1',
+      recordedBySubjectId: 'worker-1',
+    }),
+    (error) => error.code === 'IMMUNIZATION_SNAPSHOT_TENANT_CONFLICT' && error.status === 409
+  );
 });
 
 test('mocked unit-of-work can retain a complete in-memory snapshot while production persistence uses the dedicated store', async () => {
@@ -223,7 +275,7 @@ test('mocked unit-of-work can retain a complete in-memory snapshot while product
   assert.deepEqual(snapshotForEvidence(saved), snapshot);
 });
 
-test('certificate metadata migration creates tenant-isolated historical evidence tables', () => {
+test('certificate metadata migration creates tenant-isolated evidence tables and migrates legacy state', () => {
   const migration = readFileSync(
     join(
       __dirname,
@@ -238,6 +290,9 @@ test('certificate metadata migration creates tenant-isolated historical evidence
 
   assert.match(migration, /CREATE SCHEMA IF NOT EXISTS medfinet_certificate/);
   assert.match(migration, /CREATE TABLE medfinet_certificate\.facility_profiles/);
+  assert.match(migration, /INSERT INTO medfinet_certificate\.facility_profiles/);
+  assert.match(migration, /"administrativeArea"/);
+  assert.match(migration, /migration:legacy-administrative-area/);
   assert.match(migration, /CREATE TABLE medfinet_certificate\.immunization_snapshots/);
   assert.match(migration, /vaccinator_name TEXT/);
   assert.match(migration, /recorded_by_subject_id TEXT NOT NULL/);
