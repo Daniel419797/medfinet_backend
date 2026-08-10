@@ -46,6 +46,10 @@ function supportsCertificateStore(transaction) {
   return typeof transaction?.$queryRawUnsafe === 'function';
 }
 
+function positionalPlaceholders(count, startAt = 2) {
+  return Array.from({ length: count }, (_, index) => `$${startAt + index}`).join(', ');
+}
+
 async function readFacilityProfile(transaction, context, facilityId) {
   if (!facilityId || !supportsCertificateStore(transaction)) return null;
   const rows = await transaction.$queryRawUnsafe(
@@ -139,6 +143,7 @@ async function enrichFacilities(transaction, context, facilities) {
     return facilities.map((facility) => mergeFacilityProfile(facility, null));
   }
   const ids = facilities.map((facility) => facility.id);
+  const placeholders = positionalPlaceholders(ids.length);
   const rows = await transaction.$queryRawUnsafe(
     `SELECT
        facility_id AS "facilityId",
@@ -146,9 +151,9 @@ async function enrichFacilities(transaction, context, facilities) {
        lga,
        ward
      FROM medfinet_certificate.facility_profiles
-     WHERE organization_id = $1 AND facility_id = ANY($2::text[])`,
+     WHERE organization_id = $1 AND facility_id IN (${placeholders})`,
     context.organizationId,
-    ids
+    ...ids
   );
   const profiles = new Map(rows.map((row) => [row.facilityId, row]));
   return facilities.map((facility) => mergeFacilityProfile(
@@ -186,6 +191,7 @@ async function readImmunizationSnapshots(transaction, context, immunizationIds) 
   if (!immunizationIds.length || !supportsCertificateStore(transaction)) {
     return new Map();
   }
+  const placeholders = positionalPlaceholders(immunizationIds.length);
   const rows = await transaction.$queryRawUnsafe(
     `SELECT
        immunization_id AS "immunizationId",
@@ -199,9 +205,9 @@ async function readImmunizationSnapshots(transaction, context, immunizationIds) 
        vaccinator_subject_id AS "vaccinatorSubjectId",
        recorded_by_subject_id AS "recordedBySubjectId"
      FROM medfinet_certificate.immunization_snapshots
-     WHERE organization_id = $1 AND immunization_id = ANY($2::text[])`,
+     WHERE organization_id = $1 AND immunization_id IN (${placeholders})`,
     context.organizationId,
-    immunizationIds
+    ...immunizationIds
   );
   return new Map(rows.map((row) => [row.immunizationId, row]));
 }
@@ -343,7 +349,9 @@ function resolveVaccinator(context, input = {}, existing = null, { initial = fal
 }
 
 async function buildInitialImmunizationSnapshot(transaction, context, input = {}) {
-  const facilityId = requiredText(input.facilityId, 'facilityId', 160);
+  const facilityId = input.facilityId
+    ? requiredText(input.facilityId, 'facilityId', 160)
+    : null;
   const location = await facilityLocation(
     transaction,
     context,
@@ -351,13 +359,13 @@ async function buildInitialImmunizationSnapshot(transaction, context, input = {}
     { requireActive: true }
   );
   const values = {
-    // Online clients can rely on the registered facility profile. Offline
-    // clients may also send the values captured locally so the historical
-    // snapshot reflects what the worker confirmed at the time of care.
-    facilityName: input.facilityName || location.values.facilityName,
-    state: input.state || location.values.state,
-    lga: input.lga || location.values.lga,
-    ward: input.ward || location.values.ward,
+    // Registered facilities supply canonical defaults. Outreach or temporary
+    // sites may be recorded without a facility ID, but then every display
+    // field must be supplied explicitly so certificates never invent data.
+    facilityName: input.facilityName || location?.values.facilityName,
+    state: input.state || location?.values.state,
+    lga: input.lga || location?.values.lga,
+    ward: input.ward || location?.values.ward,
   };
   const normalizedLocation = completeLocation(values);
   const vaccinator = resolveVaccinator(context, input, null, { initial: true });
