@@ -270,7 +270,12 @@ async function saveImmunizationSnapshot(
   return rows[0];
 }
 
-async function facilityLocation(transaction, context, facilityId) {
+async function facilityLocation(
+  transaction,
+  context,
+  facilityId,
+  { requireActive = false } = {}
+) {
   if (!facilityId) return null;
   const facility = await transaction.facility.findFirst({
     where: { id: facilityId, organizationId: context.organizationId },
@@ -283,6 +288,13 @@ async function facilityLocation(transaction, context, facilityId) {
   });
   if (!facility) {
     throw new DomainError(404, 'FACILITY_NOT_FOUND', 'Facility not found');
+  }
+  if (requireActive && !facility.isActive) {
+    throw new DomainError(
+      409,
+      'FACILITY_INACTIVE',
+      'Select an active facility before recording a new vaccination'
+    );
   }
   const profile = await readFacilityProfile(transaction, context, facility.id);
   return {
@@ -331,13 +343,21 @@ function resolveVaccinator(context, input = {}, existing = null, { initial = fal
 }
 
 async function buildInitialImmunizationSnapshot(transaction, context, input = {}) {
-  const facilityId = input.facilityId ? requiredText(input.facilityId, 'facilityId', 160) : null;
-  const location = await facilityLocation(transaction, context, facilityId);
+  const facilityId = requiredText(input.facilityId, 'facilityId', 160);
+  const location = await facilityLocation(
+    transaction,
+    context,
+    facilityId,
+    { requireActive: true }
+  );
   const values = {
-    facilityName: input.facilityName || location?.values.facilityName,
-    state: input.state || location?.values.state,
-    lga: input.lga || location?.values.lga,
-    ward: input.ward || location?.values.ward,
+    // Online clients can rely on the registered facility profile. Offline
+    // clients may also send the values captured locally so the historical
+    // snapshot reflects what the worker confirmed at the time of care.
+    facilityName: input.facilityName || location.values.facilityName,
+    state: input.state || location.values.state,
+    lga: input.lga || location.values.lga,
+    ward: input.ward || location.values.ward,
   };
   const normalizedLocation = completeLocation(values);
   const vaccinator = resolveVaccinator(context, input, null, { initial: true });
