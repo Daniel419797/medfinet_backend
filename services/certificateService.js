@@ -11,10 +11,14 @@ const {
 } = require('./certificateNftService');
 const { audit } = require('./clinicalValidation');
 const {
-  IMMUNIZATION_FINGERPRINT_VERSION,
   amendedImmunizationAnchorId,
+  fingerprintVersionFromAnchorId,
   recordedImmunizationAnchorId,
 } = require('./immunizationIntegrity');
+const {
+  readImmunizationSnapshot,
+  snapshotForEvidence,
+} = require('./certificateMetadataService');
 const { assertResourceScope } = require('./resourceScopeService');
 const { withTenantTransaction } = require('./tenantContext');
 
@@ -46,7 +50,7 @@ function proofMaterial(record) {
     anchorId,
     aggregateId: amendment?.id || record.id,
     eventCode: event.code,
-    fingerprintVersion: IMMUNIZATION_FINGERPRINT_VERSION,
+    fingerprintVersion: fingerprintVersionFromAnchorId(anchorId),
     fingerprint: anchorId.slice(anchorId.lastIndexOf(':') + 1),
   };
 }
@@ -246,7 +250,15 @@ function createCertificateService(
       facilityId: record.facilityId,
       programmeId: record.programmeId,
     });
-    return record;
+    const snapshot = await readImmunizationSnapshot(
+      transaction,
+      context,
+      record.id,
+    );
+    return {
+      ...record,
+      certificateMetadata: snapshotForEvidence(snapshot),
+    };
   }
 
   async function ensureNftQueued(transaction, settings, record, proof) {
@@ -287,12 +299,16 @@ function createCertificateService(
         fingerprintVersion: proof.fingerprintVersion,
         algorandAnchorId: proof.anchorId,
       });
+      const metadata = record.certificateMetadata;
       const buffer = await renderer({
         childName: `${record.child.firstName} ${record.child.lastName}`,
         childDOB: record.child.dateOfBirth,
         sex: record.child.sex,
-        state: record.facility?.administrativeArea || '',
-        location: record.facility?.name || '',
+        state: metadata?.state || record.facility?.administrativeArea || '',
+        lga: metadata?.lga || '',
+        ward: metadata?.ward || '',
+        location: metadata?.facilityName || record.facility?.name || '',
+        provider: metadata?.vaccinatorName || '',
         vaccineCode: record.vaccineCode,
         doseNumber: record.doseNumber,
         verificationValue,
