@@ -26,6 +26,7 @@ const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
 const CertificateNftRepository = require('../services/certificateNftRepository');
 const { createCertificateNftService } = require('../services/certificateNftService');
+const { createCertificateNftQueueService } = require('../services/certificateNftQueueService');
 const { getNetworkConfig } = require('../services/blockchain/networkRegistry');
 
 const runOnce = process.argv.includes('--once');
@@ -55,6 +56,7 @@ async function processOrganization(organizationId) {
   const integrationProcessor = createIntegrationProcessor(prisma);
   const analyticsGeneration = createAnalyticsGenerationService(prisma);
   const receiptStore = new AnchorReceiptRepository();
+  const certificateNftQueue = createCertificateNftQueueService(prisma);
   let anchorService = null;
   let certificateNftService = null;
   if (config.algorand.enabled) {
@@ -126,10 +128,12 @@ async function processOrganization(organizationId) {
         }
         const { eventCode, anchorId, tenantId } = event.payload;
         const receipt = await anchorService.anchorEvent(eventCode, anchorId, tenantId);
+        const nftQueue = await certificateNftQueue.queueFromAnchorEvent(context, event);
         logger.info('blockchain.anchor.confirmed', {
           anchorId,
           eventCode,
           txId: receipt.txId,
+          certificateNftQueued: nftQueue.queued,
         });
       },
       BLOCKCHAIN_CERTIFICATE_NFT_REQUESTED: async (_handlerContext, event) => {
