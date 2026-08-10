@@ -4,18 +4,38 @@ const { certificateNftOutboxData } = require('./certificateNftService');
 const { IMMUNIZATION_FINGERPRINT_VERSION } = require('./immunizationIntegrity');
 const { withTenantTransaction } = require('./tenantContext');
 
-const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+const PROOF_PATTERN = /^(immunization-recorded|immunization-amended):v(\d+):([^:]+):([0-9a-f]{64})$/;
 
-function fingerprintFromProofId(proofId) {
-  const fingerprint = String(proofId || '').split(':').at(-1) || '';
-  if (!FINGERPRINT_PATTERN.test(fingerprint)) {
+function proofPartsFromProofId(proofId) {
+  const match = PROOF_PATTERN.exec(String(proofId || ''));
+  if (!match) {
     throw new DomainError(
       400,
       'CERTIFICATE_NFT_PROOF_INVALID',
-      'Immunization proof does not contain a valid fingerprint',
+      'Immunization proof does not contain a valid versioned fingerprint',
     );
   }
-  return fingerprint;
+  const fingerprintVersion = Number(match[2]);
+  if (
+    !Number.isInteger(fingerprintVersion)
+    || fingerprintVersion !== IMMUNIZATION_FINGERPRINT_VERSION
+  ) {
+    throw new DomainError(
+      409,
+      'CERTIFICATE_NFT_PROOF_VERSION_UNSUPPORTED',
+      'Immunization proof uses an unsupported fingerprint version',
+    );
+  }
+  return {
+    kind: match[1],
+    aggregateId: match[3],
+    fingerprintVersion,
+    fingerprint: match[4],
+  };
+}
+
+function fingerprintFromProofId(proofId) {
+  return proofPartsFromProofId(proofId).fingerprint;
 }
 
 function createCertificateNftQueueService(prismaClient) {
@@ -35,7 +55,17 @@ function createCertificateNftQueueService(prismaClient) {
         'Immunization anchor is not bound to the active organization',
       );
     }
-    const fingerprint = fingerprintFromProofId(proofId);
+    const proof = proofPartsFromProofId(proofId);
+    const expectedKind = eventCode === EVENT_TYPES.IMMUNIZATION_RECORD.code
+      ? 'immunization-recorded'
+      : 'immunization-amended';
+    if (proof.kind !== expectedKind || proof.aggregateId !== event.aggregateId) {
+      throw new DomainError(
+        409,
+        'CERTIFICATE_NFT_PROOF_MISMATCH',
+        'Immunization anchor identity does not match its proof ID',
+      );
+    }
 
     return withTenantTransaction(database, context.organizationId, async (transaction) => {
       let immunizationId;
@@ -82,8 +112,8 @@ function createCertificateNftQueueService(prismaClient) {
         {
           aggregateId: event.aggregateId,
           anchorId: proofId,
-          fingerprint,
-          fingerprintVersion: IMMUNIZATION_FINGERPRINT_VERSION,
+          fingerprint: proof.fingerprint,
+          fingerprintVersion: proof.fingerprintVersion,
         },
       );
       const existing = await transaction.outboxEvent.findUnique({
@@ -120,4 +150,5 @@ function createCertificateNftQueueService(prismaClient) {
 module.exports = {
   createCertificateNftQueueService,
   fingerprintFromProofId,
+  proofPartsFromProofId,
 };
