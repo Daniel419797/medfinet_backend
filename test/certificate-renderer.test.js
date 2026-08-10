@@ -4,6 +4,7 @@ const sharp = require('sharp');
 const {
   CERTIFICATE_TEMPLATE_PATH,
   buildTextOverlay,
+  normalizeBitmapText,
   renderCertificate,
 } = require('../controllers/certificate/certificate');
 
@@ -17,31 +18,35 @@ const sample = {
   doseNumber: 1,
 };
 
-test('certificate overlay contains human-readable record values', () => {
-  const overlay = buildTextOverlay(sample);
-
-  assert.match(overlay, />James New<\/text>/);
-  assert.match(overlay, />09 Aug 2025<\/text>/);
-  assert.match(overlay, />Male<\/text>/);
-  assert.match(overlay, />Lagos<\/text>/);
-  assert.match(overlay, />Dennis Primary Health Centre<\/text>/);
-  assert.match(overlay, />123 \(Dose 1\)<\/text>/);
-  assert.match(overlay, />Not recorded<\/text>/);
-  assert.doesNotMatch(overlay, /class="value"/);
+test('normalizes certificate values for the embedded bitmap glyph set', () => {
+  assert.equal(normalizeBitmapText('James New'), 'JAMES NEW');
+  assert.equal(normalizeBitmapText('09 Aug 2025'), '09 AUG 2025');
+  assert.equal(normalizeBitmapText('Lágos'), 'LAGOS');
+  assert.equal(normalizeBitmapText(''), 'NOT RECORDED');
 });
 
-test('rendered certificate changes pixels in the full-name field', async () => {
+test('certificate overlay renders without any font-dependent SVG text elements', () => {
+  const overlay = buildTextOverlay(sample);
+
+  assert.doesNotMatch(overlay, /<text\b/i);
+  assert.match(overlay, /<rect\b/i);
+});
+
+test('rendered certificate changes pixels in all core record rows', async () => {
   const rendered = await renderCertificate(sample);
-  const region = { left: 340, top: 500, width: 460, height: 55 };
+  const rows = [514, 566, 618, 670, 826, 930];
 
-  const [templatePixels, renderedPixels] = await Promise.all([
-    sharp(CERTIFICATE_TEMPLATE_PATH).extract(region).raw().toBuffer(),
-    sharp(rendered).extract(region).raw().toBuffer(),
-  ]);
+  for (const top of rows) {
+    const region = { left: 340, top, width: 440, height: 24 };
+    const [templatePixels, renderedPixels] = await Promise.all([
+      sharp(CERTIFICATE_TEMPLATE_PATH).extract(region).raw().toBuffer(),
+      sharp(rendered).extract(region).raw().toBuffer(),
+    ]);
 
-  assert.notEqual(
-    Buffer.compare(templatePixels, renderedPixels),
-    0,
-    'the full-name row should contain rendered record text',
-  );
+    assert.notEqual(
+      Buffer.compare(templatePixels, renderedPixels),
+      0,
+      `certificate row at y=${top} should contain rendered bitmap text`,
+    );
+  }
 });
