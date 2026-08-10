@@ -60,7 +60,11 @@ class BlockchainAnchorService {
       || receipt.tenantId !== tenantId
     ) return false;
     try {
-      return (await inspectAnchorReceipt(receipt, this._adapter)).verified;
+      return (await inspectAnchorReceipt(receipt, this._adapter, {
+        eventCode,
+        anchorId,
+        tenantId,
+      })).verified;
     } catch {
       return false;
     }

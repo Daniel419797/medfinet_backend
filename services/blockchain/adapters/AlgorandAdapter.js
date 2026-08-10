@@ -1,21 +1,51 @@
 const algosdk = require('algosdk');
 const ChainAdapter = require('../ChainAdapter');
 
+function addressString(value) {
+  if (!value) return null;
+  return typeof value === 'string' ? value : value.toString();
+}
+
+function positiveRound(value) {
+  if (value === undefined || value === null) return false;
+  try {
+    return BigInt(value) > 0n;
+  } catch {
+    return false;
+  }
+}
+
+function transactionNote(value) {
+  if (!value) return null;
+  return typeof value === 'string'
+    ? Buffer.from(value, 'base64')
+    : Buffer.from(value);
+}
+
+function isNotFound(error) {
+  return [
+    error?.status,
+    error?.statusCode,
+    error?.response?.status,
+    error?.response?.statusCode,
+  ].some((value) => Number(value) === 404);
+}
+
 class AlgorandAdapter extends ChainAdapter {
-  constructor(config) {
+  constructor(config, dependencies = {}) {
     super();
     const resolvedConfig = config?.network
       ? config
       : require('../networkRegistry').getNetworkConfig();
     this.config = resolvedConfig;
-    this.client = new algosdk.Algodv2(
+    this._sdk = dependencies.sdk || algosdk;
+    this.client = dependencies.client || new this._sdk.Algodv2(
       resolvedConfig.algodToken || '',
       resolvedConfig.algodServer,
       resolvedConfig.algodPort
     );
-    this.platformAccount = algosdk.mnemonicToSecretKey(
-      resolvedConfig.platformWalletMnemonic
-    );
+    this.platformAccount = dependencies.platformAccount
+      || this._sdk.mnemonicToSecretKey(resolvedConfig.platformWalletMnemonic);
     this._confirmationRounds = resolvedConfig.confirmationRounds || 4;
     this._fee = resolvedConfig.fee || 1_000;
   }
@@ -42,9 +72,9 @@ class AlgorandAdapter extends ChainAdapter {
 
   async submitTransaction(note, fee) {
     const params = await this.client.getTransactionParams().do();
-    const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-      from: this.platformAccount.addr,
-      to: this.platformAccount.addr,
+    const txn = this._sdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender: this.platformAccount.addr,
+      receiver: this.platformAccount.addr,
       amount: 0,
       note,
       suggestedParams: {
@@ -54,13 +84,17 @@ class AlgorandAdapter extends ChainAdapter {
       },
     });
     const signed = txn.signTxn(this.platformAccount.sk);
-    const { txId } = await this.client.sendRawTransaction(signed).do();
-    const confirmed = await algosdk.waitForConfirmation(
+    const { txid: txId } = await this.client.sendRawTransaction(signed).do();
+    const confirmed = await this._sdk.waitForConfirmation(
       this.client, txId, this._confirmationRounds
     );
+    const confirmedRound = confirmed.confirmedRound;
+    if (!positiveRound(confirmedRound)) {
+      throw new Error(`Algorand transaction ${txId} did not reach a confirmed round`);
+    }
     return {
       txId,
-      blockHeight: confirmed['confirmed-round'],
+      blockHeight: confirmedRound,
       confirmations: this._confirmationRounds,
       network: this.networkId,
     };
@@ -68,15 +102,37 @@ class AlgorandAdapter extends ChainAdapter {
 
   async getTransaction(txId) {
     try {
-      const tx = await this.client.pendingTransactionInformation(txId).do();
+      const pending = await this.client.pendingTransactionInformation(txId).do();
+      const signed = pending.txn;
+      const transaction = signed?.txn;
+      const payment = transaction?.payment;
+      const confirmedRound = pending.confirmedRound;
+      const roundTime = pending.roundTime ?? pending['round-time'];
+      let actualTxId = null;
+      try {
+        actualTxId = transaction?.txID?.() || null;
+      } catch {
+        actualTxId = null;
+      }
       return {
-        txId,
-        note: tx.txn.txn.note ? Buffer.from(tx.txn.txn.note, 'base64') : null,
-        timestamp: tx['round-time'] ? new Date(tx['round-time'] * 1000).toISOString() : null,
-        confirmed: tx.confirmedRound !== undefined && tx.confirmedRound !== null,
+        txId: actualTxId,
+        note: transactionNote(transaction?.note),
+        timestamp: roundTime
+          ? new Date(Number(roundTime) * 1000).toISOString()
+          : null,
+        confirmedRound,
+        confirmed: positiveRound(confirmedRound),
+        type: transaction?.type || null,
+        sender: addressString(transaction?.sender),
+        signer: addressString(signed?.sgnr || transaction?.sender),
+        receiver: addressString(payment?.receiver),
+        amount: payment?.amount ?? null,
+        rekeyTo: addressString(transaction?.rekeyTo),
+        closeRemainderTo: addressString(payment?.closeRemainderTo),
       };
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
     }
   }
 

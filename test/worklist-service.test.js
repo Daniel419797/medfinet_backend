@@ -114,6 +114,7 @@ test('queues worklist generation idempotently through the outbox', async () => {
   assert.deepEqual(result, {
     worklistId: 'worklist-1',
     outboxEventId: 'outbox-1',
+    scoringPolicyVersion: 'climate-worklist-risk-v1',
   });
   assert.equal(
     calls[0][1].create.eventType,

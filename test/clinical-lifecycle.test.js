@@ -135,7 +135,8 @@ test('amends immunization while preserving immutable before-and-after evidence',
   assert.equal(amendment.previousData.lotNumber, 'LOT-OLD');
   assert.equal(amendment.replacementData.lotNumber, 'LOT-NEW');
   assert.equal(anchor.payload.eventCode, 0x0A);
-  assert.match(anchor.payload.anchorId, /^immunization-amended:amendment-1:[a-f0-9]{64}$/);
+  assert.match(anchor.payload.anchorId, /^immunization-amended:v1:amendment-1:[a-f0-9]{64}$/);
+  assert.equal(anchor.idempotencyKey, 'blockchain:10:v1:amendment-1');
   assert.doesNotMatch(anchor.payload.anchorId, /LOT-OLD|LOT-NEW|child-1/);
 });
 

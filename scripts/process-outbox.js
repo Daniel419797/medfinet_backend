@@ -24,6 +24,7 @@ const config = require('../config');
 const BlockchainAnchorService = require('../services/blockchain/BlockchainAnchorService');
 const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
+const { getNetworkConfig } = require('../services/blockchain/networkRegistry');
 
 const runOnce = process.argv.includes('--once');
 const workerId = `${os.hostname()}:${process.pid}`;
@@ -54,16 +55,20 @@ async function processOrganization(organizationId) {
   const receiptStore = new AnchorReceiptRepository();
   let anchorService = null;
   if (config.algorand.enabled) {
-    const adapter = new AlgorandAdapter(config.algorand);
+    const selectedConfig = getNetworkConfig();
+    const adapter = new AlgorandAdapter(selectedConfig);
     anchorService = new BlockchainAnchorService(adapter, receiptStore, {
       enabled: true,
-      fee: config.algorand.fee,
+      fee: selectedConfig.fee,
     });
   }
   const queueNotification = async (_handlerContext, event) => {
     await notificationQueue.queueOutboxEvent(context, event);
   };
   const outbox = createOutboxService(prisma, {
+    excludedEventTypes: config.algorand.enabled
+      ? []
+      : ['BLOCKCHAIN_ANCHOR_REQUESTED'],
     handlers: {
       SYNC_BATCH_ACCEPTED: async (_handlerContext, event) => {
         await syncService.processBatch(context, event.payload.syncBatchId);

@@ -20,14 +20,35 @@ function receiptFromMaterial(material) {
 
 function adapterWithNote(note) {
   return {
+    platformAccount: 'PLATFORM-ACCOUNT',
     networkName: 'Algorand TestNet',
     networkId: 'testnet',
     async getTransaction() {
-      return { confirmed: true, note };
+      return {
+        txId: 'TX-1',
+        confirmed: true,
+        confirmedRound: 42n,
+        note,
+        type: 'pay',
+        sender: 'PLATFORM-ACCOUNT',
+        signer: 'PLATFORM-ACCOUNT',
+        receiver: 'PLATFORM-ACCOUNT',
+        amount: 0n,
+        rekeyTo: null,
+        closeRemainderTo: null,
+      };
     },
     getExplorerUrl(txId) {
       return `https://testnet.explorer.perawallet.app/tx/${txId}`;
     },
+  };
+}
+
+function expectedClaim() {
+  return {
+    anchorId: 'immunization:record-1:fingerprint',
+    eventCode: 0x09,
+    tenantId: 'org-1',
   };
 }
 
@@ -40,6 +61,7 @@ test('verifies the receipt hash against the confirmed Algorand transaction note'
   const evidence = await inspectAnchorReceipt(
     receiptFromMaterial(material),
     adapterWithNote(material.note),
+    expectedClaim(),
   );
 
   assert.equal(evidence.hashIntegrity, true);
@@ -59,6 +81,7 @@ test('rejects a confirmed transaction whose Algorand note does not match', async
   const evidence = await inspectAnchorReceipt(
     receiptFromMaterial(material),
     adapterWithNote(tampered),
+    expectedClaim(),
   );
 
   assert.equal(evidence.hashIntegrity, true);
@@ -75,7 +98,11 @@ test('reports a missing Algorand transaction as an integrity mismatch', async ()
   const adapter = adapterWithNote(material.note);
   adapter.getTransaction = async () => null;
 
-  const evidence = await inspectAnchorReceipt(receiptFromMaterial(material), adapter);
+  const evidence = await inspectAnchorReceipt(
+    receiptFromMaterial(material),
+    adapter,
+    expectedClaim(),
+  );
 
   assert.equal(evidence.hashIntegrity, true);
   assert.equal(evidence.noteIntegrity, false);
@@ -90,9 +117,18 @@ test('preserves note integrity while an Algorand transaction is unconfirmed', as
     'immunization:record-1:fingerprint',
   );
   const adapter = adapterWithNote(material.note);
-  adapter.getTransaction = async () => ({ confirmed: false, note: material.note });
+  const confirmedTransaction = await adapter.getTransaction();
+  adapter.getTransaction = async () => ({
+    ...confirmedTransaction,
+    confirmed: false,
+    confirmedRound: 0n,
+  });
 
-  const evidence = await inspectAnchorReceipt(receiptFromMaterial(material), adapter);
+  const evidence = await inspectAnchorReceipt(
+    receiptFromMaterial(material),
+    adapter,
+    expectedClaim(),
+  );
 
   assert.equal(evidence.hashIntegrity, true);
   assert.equal(evidence.noteIntegrity, true);
@@ -116,11 +152,54 @@ test('rejects a malformed receipt hash without querying Algorand', async () => {
   const evidence = await inspectAnchorReceipt(
     { ...receiptFromMaterial(material), hash: 'not-a-32-byte-hash' },
     adapter,
+    expectedClaim(),
   );
 
   assert.equal(queried, false);
   assert.equal(evidence.noteIntegrity, false);
   assert.equal(evidence.chainConfirmed, false);
+  assert.equal(evidence.verified, false);
+});
+
+test('rejects a receipt that is not bound to the requested tenant and event', async () => {
+  const material = buildNote(0x09, 'org-1', 'immunization:record-1:fingerprint');
+  let queried = false;
+  const adapter = adapterWithNote(material.note);
+  adapter.getTransaction = async () => {
+    queried = true;
+    return null;
+  };
+
+  const evidence = await inspectAnchorReceipt(
+    receiptFromMaterial(material),
+    adapter,
+    { ...expectedClaim(), tenantId: 'org-2' },
+  );
+
+  assert.equal(queried, false);
+  assert.equal(evidence.receiptIntegrity, false);
+  assert.equal(evidence.verified, false);
+});
+
+test('rejects a copied note on a transaction not signed by the platform account', async () => {
+  const material = buildNote(0x09, 'org-1', 'immunization:record-1:fingerprint');
+  const adapter = adapterWithNote(material.note);
+  const transaction = await adapter.getTransaction();
+  adapter.getTransaction = async () => ({
+    ...transaction,
+    sender: 'ATTACKER-ACCOUNT',
+    signer: 'ATTACKER-ACCOUNT',
+    receiver: 'ATTACKER-ACCOUNT',
+  });
+
+  const evidence = await inspectAnchorReceipt(
+    receiptFromMaterial(material),
+    adapter,
+    expectedClaim(),
+  );
+
+  assert.equal(evidence.noteIntegrity, true);
+  assert.equal(evidence.transactionIntegrity, false);
   assert.equal(evidence.verified, false);
 });
 

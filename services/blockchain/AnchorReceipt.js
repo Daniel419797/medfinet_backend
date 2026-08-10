@@ -28,7 +28,7 @@ class AnchorReceipt {
       eventCategory: this.eventCategory,
       tenantId: this.tenantId,
       txId: this.txId,
-      blockHeight: this.blockHeight,
+      blockHeight: this.blockHeight == null ? null : String(this.blockHeight),
       timestamp: this.timestamp,
       nonce: this.nonce,
       hash: this.hash,

@@ -16,6 +16,7 @@ const { assertResourceScope } = require('./resourceScopeService');
 const { EVENT_TYPES } = require('./blockchain/eventTypes');
 const { assertClinicalWriteAccess } = require('./clinicalAccessPolicy');
 const {
+  IMMUNIZATION_FINGERPRINT_VERSION,
   duplicateImmunizationError,
   immunizationDeduplicationKey,
   isDeduplicationConstraintError,
@@ -115,7 +116,7 @@ function createClinicalService(prismaClient) {
               eventType: 'BLOCKCHAIN_ANCHOR_REQUESTED',
               aggregateType: 'blockchain-anchor',
               aggregateId: record.id,
-              idempotencyKey: `blockchain:${anchor.code}:${record.id}`,
+              idempotencyKey: `blockchain:${anchor.code}:v${IMMUNIZATION_FINGERPRINT_VERSION}:${record.id}`,
               payload: {
                 eventCode: anchor.code,
                 anchorId: recordedImmunizationAnchorId(record),

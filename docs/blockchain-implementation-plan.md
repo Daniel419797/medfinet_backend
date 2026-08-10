@@ -133,7 +133,7 @@ class BlockchainAnchorService {
 ### 3.1 What goes on-chain (nothing identifiable)
 
 ```
-On-chain note (36 bytes):
+On-chain note (35 bytes):
 ┌────────┬────────┬──────────────────────────────────────┐
 │ 2 bytes │ 1 byte │             32 bytes                  │
 │ version│  type  │  sha256(tenant_id + anchor_id +        │
@@ -342,7 +342,7 @@ State: CLOSED (normal) → OPEN (failing) → HALF_OPEN (testing)
 - No magic numbers — all constants named:
   ```js
   // Bad
-  const note = Buffer.alloc(36);
+  const note = Buffer.alloc(35);
   
   // Good
   const VERSION_BYTES = 2;

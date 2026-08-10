@@ -24,6 +24,26 @@ const EVENT_BY_CODE = Object.values(EVENT_TYPES).reduce((map, entry) => {
   return map;
 }, {});
 
+const EVENT_CODE_BY_ANCHOR_PREFIX = Object.freeze({
+  'consent:': EVENT_TYPES.CONSENT_GRANT.code,
+  'consent-withdrawal:': EVENT_TYPES.CONSENT_WITHDRAWAL.code,
+  'emergency:': EVENT_TYPES.EMERGENCY_ACCESS.code,
+  'identity-amendment:': EVENT_TYPES.IDENTITY_AMENDMENT.code,
+  'data-subject-request:': EVENT_TYPES.SUBJECT_REQUEST.code,
+  'nfc-activate:': EVENT_TYPES.NFC_ACTIVATE.code,
+  'nfc-revoke:': EVENT_TYPES.NFC_REVOKE.code,
+  'nfc-replace:': EVENT_TYPES.NFC_REPLACE.code,
+  'immunization-recorded:': EVENT_TYPES.IMMUNIZATION_RECORD.code,
+  'immunization-amended:': EVENT_TYPES.IMMUNIZATION_AMEND.code,
+});
+
+function eventCodeForAnchorId(anchorId) {
+  const value = String(anchorId || '');
+  const match = Object.entries(EVENT_CODE_BY_ANCHOR_PREFIX)
+    .find(([prefix]) => value.startsWith(prefix));
+  return match?.[1] ?? null;
+}
+
 function isValidEventCode(code) {
   return Number.isInteger(code) && Boolean(EVENT_BY_CODE[code]);
 }
@@ -71,6 +91,8 @@ module.exports = {
   NONCE_BYTES,
   EVENT_TYPES,
   EVENT_BY_CODE,
+  EVENT_CODE_BY_ANCHOR_PREFIX,
+  eventCodeForAnchorId,
   isValidEventCode,
   noteFromHash,
   buildNote,

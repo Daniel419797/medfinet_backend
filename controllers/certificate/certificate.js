@@ -78,11 +78,11 @@ async function renderCertificate(data) {
         <rect x="180" y="1148" width="493" height="48" fill="#ffffff" opacity="0.96" />
         <text x="426" y="1168" fill="#064e3b" font-family="Arial, Helvetica, sans-serif"
               font-size="13" font-weight="800" text-anchor="middle" letter-spacing="1">
-          SCAN TO VERIFY THE ALGORAND PROOF
+          SCAN TO CHECK CERTIFICATE EVIDENCE
         </text>
         <text x="426" y="1187" fill="#334155" font-family="Arial, Helvetica, sans-serif"
               font-size="11" text-anchor="middle">
-          Only a cryptographic fingerprint is anchored; no medical data is public.
+          Evidence may be pending; no identity or medical data is made public.
         </text>
       ` : ''}
       <g transform="rotate(-18 426 760)" opacity="0.16">

@@ -55,6 +55,15 @@ function optionalInteger(name, defaultValue, options) {
   return requireInteger(name, options);
 }
 
+function optionalUrl(name, defaultValue) {
+  const value = optionalString(name) || defaultValue;
+  try {
+    return new URL(value).toString().replace(/\/$/, '');
+  } catch {
+    throw new Error(`${name} must be a valid absolute URL`);
+  }
+}
+
 function credentialResolver() {
   const raw = process.env.INTEGRATION_CREDENTIALS_JSON?.trim() || '{}';
   let credentials;
@@ -211,32 +220,121 @@ function ussdConfig(nodeEnv) {
 
 function algorandConfig(nodeEnv) {
   const enabled = optionalBoolean('ALGORAND_ENABLED');
-  if (!enabled) {
-    return Object.freeze({ enabled: false });
+  const definitions = Object.freeze({
+    testnet: Object.freeze({
+      id: 'testnet',
+      label: 'Algorand TestNet',
+      chainId: 416002,
+      algodServer: 'https://testnet-api.algonode.cloud',
+      explorerTransactionUrl: 'https://testnet.explorer.perawallet.app/tx',
+    }),
+    mainnet: Object.freeze({
+      id: 'mainnet',
+      label: 'Algorand MainNet',
+      chainId: 416001,
+      algodServer: 'https://mainnet-api.algonode.cloud',
+      explorerTransactionUrl: 'https://explorer.perawallet.app/tx',
+    }),
+  });
+  const normalizeNetwork = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'testnet' || normalized === 'test') return 'testnet';
+    if (normalized === 'mainnet' || normalized === 'main') return 'mainnet';
+    return null;
+  };
+  const legacyServer = optionalString('ALGORAND_ALGOD_SERVER');
+  const requestedDefault = optionalString('ALGORAND_DEFAULT_NETWORK');
+  const defaultNetwork = requestedDefault
+    ? normalizeNetwork(requestedDefault)
+    : (String(legacyServer || '').toLowerCase().includes('mainnet') ? 'mainnet' : 'testnet');
+  if (!defaultNetwork) {
+    throw new Error('ALGORAND_DEFAULT_NETWORK must be testnet or mainnet');
   }
-  const algodServer = requireUrl('ALGORAND_ALGOD_SERVER');
-  if (nodeEnv === 'production' && algodServer.startsWith('http://')) {
-    throw new Error('ALGORAND_ALGOD_SERVER must use HTTPS in production');
+  const allowedRaw = optionalString('ALGORAND_ALLOWED_NETWORKS') || 'testnet,mainnet';
+  const requestedNetworks = allowedRaw.split(',').map((value) => value.trim()).filter(Boolean);
+  const allowedNetworks = [...new Set(requestedNetworks.map(normalizeNetwork))];
+  if (
+    allowedNetworks.length === 0
+    || allowedNetworks.length !== requestedNetworks.length
+  ) {
+    throw new Error('ALGORAND_ALLOWED_NETWORKS may contain only testnet and mainnet');
   }
-  const algodPort = optionalInteger('ALGORAND_ALGOD_PORT', 443, { min: 1, max: 65535 });
-  const platformWalletMnemonic = requireString('ALGORAND_PLATFORM_WALLET_MNEMONIC');
-  const words = platformWalletMnemonic.split(/\s+/);
-  if (words.length !== 25) {
-    throw new Error('ALGORAND_PLATFORM_WALLET_MNEMONIC must contain exactly 25 words');
+  const selectedDefault = allowedNetworks.includes(defaultNetwork)
+    ? defaultNetwork
+    : allowedNetworks[0];
+
+  let platformWalletMnemonic = null;
+  let confirmationRounds = 4;
+  let fee = 1_000;
+  if (enabled) {
+    platformWalletMnemonic = requireString('ALGORAND_PLATFORM_WALLET_MNEMONIC');
+    if (platformWalletMnemonic.split(/\s+/).length !== 25) {
+      throw new Error('ALGORAND_PLATFORM_WALLET_MNEMONIC must contain exactly 25 words');
+    }
+    confirmationRounds = optionalInteger(
+      'ALGORAND_CONFIRMATION_ROUNDS',
+      4,
+      { min: 1, max: 10 }
+    );
+    fee = optionalInteger(
+      'ALGORAND_FEE_MICROALGOS',
+      1_000,
+      { min: 1_000, max: 100_000 }
+    );
   }
-  const confirmationRounds = optionalInteger('ALGORAND_CONFIRMATION_ROUNDS', 4, { min: 1, max: 10 });
-  const fee = optionalInteger('ALGORAND_FEE_MICROALGOS', 1000, { min: 1_000, max: 100_000 });
-  const explorerTransactionUrl = requireUrl('ALGORAND_EXPLORER_TRANSACTION_URL')
-    .replace(/\/$/, '');
+
+  const networks = Object.fromEntries(
+    Object.entries(definitions).map(([network, definition]) => {
+      const prefix = `ALGORAND_${network.toUpperCase()}`;
+      const useLegacy = network === selectedDefault;
+      const algodServer = optionalUrl(
+        `${prefix}_ALGOD_SERVER`,
+        (useLegacy && legacyServer) || definition.algodServer
+      );
+      const explorerTransactionUrl = optionalUrl(
+        `${prefix}_EXPLORER_TRANSACTION_URL`,
+        (useLegacy && optionalString('ALGORAND_EXPLORER_TRANSACTION_URL'))
+          || definition.explorerTransactionUrl
+      );
+      if (
+        enabled
+        && nodeEnv === 'production'
+        && (algodServer.startsWith('http://') || explorerTransactionUrl.startsWith('http://'))
+      ) {
+        throw new Error(`${prefix} service URLs must use HTTPS in production`);
+      }
+      return [network, Object.freeze({
+        ...definition,
+        algodServer,
+        algodPort: optionalInteger(
+          `${prefix}_ALGOD_PORT`,
+          useLegacy
+            ? optionalInteger('ALGORAND_ALGOD_PORT', 443, { min: 1, max: 65535 })
+            : 443,
+          { min: 1, max: 65535 }
+        ),
+        algodToken: optionalString(`${prefix}_ALGOD_TOKEN`)
+          || (useLegacy ? optionalString('ALGORAND_ALGOD_TOKEN') : null)
+          || '',
+        explorerTransactionUrl,
+      })];
+    })
+  );
+  const defaultSettings = networks[selectedDefault];
+
   return Object.freeze({
-    enabled: true,
-    algodServer,
-    algodPort,
-    algodToken: process.env.ALGORAND_ALGOD_TOKEN?.trim() || '',
+    enabled,
+    defaultNetwork: selectedDefault,
+    allowedNetworks: Object.freeze(allowedNetworks),
+    networks: Object.freeze(networks),
     platformWalletMnemonic,
     confirmationRounds,
     fee,
-    explorerTransactionUrl,
+    // Preserve the original single-network interface for legacy read-only callers.
+    algodServer: defaultSettings.algodServer,
+    algodPort: defaultSettings.algodPort,
+    algodToken: defaultSettings.algodToken,
+    explorerTransactionUrl: defaultSettings.explorerTransactionUrl,
   });
 }
 

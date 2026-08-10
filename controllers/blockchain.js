@@ -1,5 +1,8 @@
 const config = require('../config');
+const { logger } = require('../utils/logger');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
+const { inspectAnchorReceipt } = require('../services/blockchain/receiptVerification');
+const { eventCodeForAnchorId } = require('../services/blockchain/eventTypes');
 const {
   defaultNetwork,
   getNetworkConfig,
@@ -12,7 +15,10 @@ const receiptStore = new AnchorReceiptRepository();
 async function getAnchor(req, res, next) {
   try {
     const { anchorId } = req.params;
-    const receipt = await receiptStore.findByAnchorId(anchorId);
+    const receipt = await receiptStore.findByAnchorIdForTenant(
+      anchorId,
+      req.organization.id
+    );
     if (!receipt) {
       return res.status(404).json({
         success: false,
@@ -43,7 +49,10 @@ async function listAnchors(req, res, next) {
 async function verifyAnchor(req, res, next) {
   try {
     const { anchorId } = req.params;
-    const receipt = await receiptStore.findByAnchorId(anchorId);
+    const receipt = await receiptStore.findByAnchorIdForTenant(
+      anchorId,
+      req.organization.id
+    );
     if (!receipt) {
       return res.status(404).json({
         success: false,
@@ -51,28 +60,63 @@ async function verifyAnchor(req, res, next) {
         message: 'Anchor not found',
       });
     }
-    const { verifyHash } = require('../services/blockchain/eventTypes');
-    const hashOk = verifyHash(
-      receipt.eventCode,
-      receipt.tenantId,
-      receipt.anchorId,
-      receipt.timestamp,
-      receipt.nonce,
-      receipt.hash
-    );
-    return res.json({
-      success: true,
-      data: {
-        anchorId: receipt.anchorId,
-        eventCode: receipt.eventCode,
-        eventCategory: receipt.eventCategory,
-        txId: receipt.txId,
-        blockHeight: receipt.blockHeight,
-        confirmedAt: receipt.confirmedAt,
-        hashIntegrity: hashOk,
-        status: receipt.status,
-      },
-    });
+    const base = {
+      anchorId: receipt.anchorId,
+      eventCode: receipt.eventCode,
+      eventCategory: receipt.eventCategory,
+      txId: receipt.txId,
+      blockHeight: receipt.blockHeight == null ? null : String(receipt.blockHeight),
+      confirmedAt: receipt.confirmedAt,
+      receiptIntegrity: null,
+      hashIntegrity: null,
+      txIdIntegrity: null,
+      noteIntegrity: null,
+      transactionIntegrity: null,
+      chainConfirmed: null,
+      network: null,
+      networkId: null,
+      explorerUrl: null,
+    };
+    if (!config.algorand.enabled) {
+      return res.json({ success: true, data: { ...base, status: 'DISABLED' } });
+    }
+
+    const selectedNetwork = networkFromRequest(req);
+    const selectedConfig = getNetworkConfig(selectedNetwork);
+    const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
+    try {
+      const inspected = await inspectAnchorReceipt(
+        receipt,
+        new AlgorandAdapter(selectedConfig),
+        {
+          anchorId,
+          eventCode: eventCodeForAnchorId(anchorId),
+          tenantId: req.organization.id,
+        }
+      );
+      const integrityVerified = inspected.receiptIntegrity
+        && inspected.hashIntegrity
+        && inspected.txIdIntegrity
+        && inspected.noteIntegrity
+        && inspected.transactionIntegrity;
+      const verified = Boolean(integrityVerified && inspected.chainConfirmed);
+      const status = verified
+        ? 'CONFIRMED'
+        : integrityVerified
+          ? 'UNCONFIRMED'
+          : 'MISMATCH';
+      return res.json({
+        success: true,
+        data: { ...base, ...inspected, verified, status },
+      });
+    } catch (error) {
+      logger.warn('blockchain.anchor-verification-unavailable', {
+        anchorId,
+        errorType: error?.name || 'Error',
+        errorCode: error?.code || null,
+      });
+      return res.json({ success: true, data: { ...base, status: 'UNAVAILABLE' } });
+    }
   } catch (error) {
     return next(error);
   }

@@ -2,9 +2,13 @@ const { prisma } = require('../utils/prisma');
 const AnchorReceipt = require('./blockchain/AnchorReceipt');
 
 class AnchorReceiptRepository {
+  constructor(prismaClient = prisma) {
+    this._prisma = prismaClient;
+  }
+
   async save(receipt) {
     const data = receipt.toDatabase();
-    await prisma.anchorReceipt.upsert({
+    await this._prisma.anchorReceipt.upsert({
       where: { anchorId: receipt.anchorId },
       update: data,
       create: data,
@@ -13,14 +17,21 @@ class AnchorReceiptRepository {
   }
 
   async findByAnchorId(anchorId) {
-    const row = await prisma.anchorReceipt.findUnique({
+    const row = await this._prisma.anchorReceipt.findUnique({
       where: { anchorId },
     });
     return row ? AnchorReceipt.fromDatabase(row) : null;
   }
 
+  async findByAnchorIdForTenant(anchorId, tenantId) {
+    const row = await this._prisma.anchorReceipt.findFirst({
+      where: { anchorId, tenantId },
+    });
+    return row ? AnchorReceipt.fromDatabase(row) : null;
+  }
+
   async findByTxId(txId) {
-    const row = await prisma.anchorReceipt.findUnique({
+    const row = await this._prisma.anchorReceipt.findUnique({
       where: { txId },
     });
     return row ? AnchorReceipt.fromDatabase(row) : null;
@@ -32,7 +43,7 @@ class AnchorReceiptRepository {
     if (eventCode) where.eventCode = eventCode;
     if (cursor) where.anchorId = { gt: cursor };
 
-    const rows = await prisma.anchorReceipt.findMany({
+    const rows = await this._prisma.anchorReceipt.findMany({
       where,
       orderBy: { submittedAt: 'desc' },
       take: limit,
@@ -42,11 +53,11 @@ class AnchorReceiptRepository {
   }
 
   async countByStatus(status) {
-    return prisma.anchorReceipt.count({ where: { status } });
+    return this._prisma.anchorReceipt.count({ where: { status } });
   }
 
   async deleteBefore(date) {
-    const result = await prisma.anchorReceipt.deleteMany({
+    const result = await this._prisma.anchorReceipt.deleteMany({
       where: { submittedAt: { lt: date } },
     });
     return result.count;

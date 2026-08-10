@@ -16,6 +16,7 @@ function createOutboxService(
     now = () => new Date(),
     maxAttempts = MAX_ATTEMPTS,
     lockTimeoutMs = LOCK_TIMEOUT_MS,
+    excludedEventTypes = [],
   } = {}
 ) {
   const database = prismaClient || require('../utils/prisma').prisma;
@@ -45,6 +46,9 @@ function createOutboxService(
           status: { in: ['PENDING', 'FAILED'] },
           attempts: { lt: maxAttempts },
           nextAttemptAt: { lte: currentTime },
+          ...(excludedEventTypes.length
+            ? { eventType: { notIn: excludedEventTypes } }
+            : {}),
         },
         orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
       });
