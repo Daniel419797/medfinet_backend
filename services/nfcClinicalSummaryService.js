@@ -108,6 +108,9 @@ async function loadNfcImmunizationSummary(
       where: {
         organizationId,
         childId: child.id,
+        recipientType: 'ORGANIZATION',
+        recipientId: organizationId,
+        purpose,
         status: 'ACTIVE',
         startsAt: { lte: currentTime },
         OR: [{ expiresAt: null }, { expiresAt: { gt: currentTime } }],
