@@ -68,6 +68,7 @@ module.exports = {
   resolveCredential: handle((req) => credentialService.resolve(context(req), req.body.token, req.body)),
   revokeCredential: handle((req) => credentialService.revoke(context(req), req.params.credentialId, req.body)),
   replaceCredential: handle((req) => credentialService.replace(context(req), req.params.credentialId, req.body), 201),
+  listImmunizations: handle((req) => timelineService.getImmunizations(context(req), req.params.id)),
   recordImmunization: handle((req) => service.recordImmunization(context(req), req.params.id, req.body), 201),
   recordGrowth: handle((req) => service.recordGrowth(context(req), req.params.id, req.body), 201),
   createAlert: handle((req) => service.createAlert(context(req), req.params.id, req.body), 201),
