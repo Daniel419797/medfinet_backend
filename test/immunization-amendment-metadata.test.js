@@ -86,6 +86,7 @@ test('completes a legacy certificate through an audited v2 amendment without rew
   const result = await service.amend(context(), 'imm-1', {
     reason: 'Verified original vaccination register',
     facilityId: 'facility-1',
+    facilityName: 'Dennis Primary Health Centre',
     state: 'Delta',
     lga: 'Uvwie',
     ward: 'Ekpan',
@@ -110,6 +111,10 @@ test('completes a legacy certificate through an audited v2 amendment without rew
   assert.equal(
     amendment.replacementData.certificateMetadata.vaccinatorName,
     'Nurse Ada Okafor'
+  );
+  assert.equal(
+    amendment.replacementData.certificateMetadata.facilityName,
+    'Dennis Primary Health Centre'
   );
 
   const outbox = calls.find(([kind]) => kind === 'outbox')[1];
