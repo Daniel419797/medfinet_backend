@@ -16,6 +16,12 @@ const { assertResourceScope } = require('./resourceScopeService');
 const { EVENT_TYPES } = require('./blockchain/eventTypes');
 const { assertClinicalWriteAccess } = require('./clinicalAccessPolicy');
 const {
+  buildInitialImmunizationSnapshot,
+  readImmunizationSnapshot,
+  saveImmunizationSnapshot,
+  snapshotForEvidence,
+} = require('./certificateMetadataService');
+const {
   IMMUNIZATION_FINGERPRINT_VERSION,
   duplicateImmunizationError,
   immunizationDeduplicationKey,
@@ -47,10 +53,13 @@ function createClinicalService(prismaClient) {
       vaccineCode,
       doseNumber,
       administeredAt: timestamp(input.administeredAt, 'administeredAt', { future: false }),
+      // Kept for backwards compatibility with the original clinical schema.
+      // The authoritative certificate snapshot separately records both the
+      // actual vaccinator and the user who entered the record.
       administeringSubjectId: context.actorSubjectId,
       deduplicationKey: immunizationDeduplicationKey(childId, vaccineCode, doseNumber),
-      ...(input.facilityId ? { facilityId: input.facilityId } : {}),
-      ...(input.programmeId ? { programmeId: input.programmeId } : {}),
+      ...(input.facilityId ? { facilityId: requiredText(input.facilityId, 'facilityId', 160) } : {}),
+      ...(input.programmeId ? { programmeId: requiredText(input.programmeId, 'programmeId', 160) } : {}),
       ...(input.lotNumber ? { lotNumber: requiredText(input.lotNumber, 'lotNumber', 100) } : {}),
       ...(input.route ? { route: requiredText(input.route, 'route', 80) } : {}),
       ...(input.site ? { site: requiredText(input.site, 'site', 80) } : {}),
@@ -78,7 +87,15 @@ function createClinicalService(prismaClient) {
                 'sourceOperationId was already used for another child'
               );
             }
-            return withoutImmunizationIntegrityFields(replay);
+            const replaySnapshot = await readImmunizationSnapshot(
+              transaction,
+              context,
+              replay.id
+            );
+            return {
+              ...withoutImmunizationIntegrityFields(replay),
+              certificateMetadata: snapshotForEvidence(replaySnapshot),
+            };
           }
         }
         await assertResourceScope(transaction, context, {
@@ -98,7 +115,20 @@ function createClinicalService(prismaClient) {
         });
         if (duplicate) throw duplicateImmunizationError(duplicate.id);
 
+        const snapshot = await buildInitialImmunizationSnapshot(
+          transaction,
+          context,
+          input
+        );
         const record = await transaction.immunizationRecord.create({ data });
+        const savedSnapshot = await saveImmunizationSnapshot(
+          transaction,
+          context,
+          record.id,
+          snapshot
+        );
+        const certificateMetadata = snapshotForEvidence(savedSnapshot);
+        const evidenceRecord = { ...record, certificateMetadata };
         const anchor = EVENT_TYPES.IMMUNIZATION_RECORD;
         await Promise.all([
           transaction.auditEvent.create({
@@ -107,7 +137,12 @@ function createClinicalService(prismaClient) {
               'immunization.recorded',
               'immunization',
               record.id,
-              { childId }
+              {
+                childId,
+                facilityId: certificateMetadata.facilityId,
+                recordedBySubjectId: certificateMetadata.recordedBySubjectId,
+                vaccinatorSubjectId: certificateMetadata.vaccinatorSubjectId,
+              }
             ),
           }),
           transaction.outboxEvent.create({
@@ -119,13 +154,16 @@ function createClinicalService(prismaClient) {
               idempotencyKey: `blockchain:${anchor.code}:v${IMMUNIZATION_FINGERPRINT_VERSION}:${record.id}`,
               payload: {
                 eventCode: anchor.code,
-                anchorId: recordedImmunizationAnchorId(record),
+                anchorId: recordedImmunizationAnchorId(evidenceRecord),
                 tenantId: context.organizationId,
               },
             },
           }),
         ]);
-        return withoutImmunizationIntegrityFields(record);
+        return {
+          ...withoutImmunizationIntegrityFields(record),
+          certificateMetadata,
+        };
       });
     } catch (error) {
       if (isDeduplicationConstraintError(error)) {
