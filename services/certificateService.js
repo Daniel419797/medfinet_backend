@@ -219,12 +219,6 @@ function createCertificateService(
             medfinetId: true,
           },
         },
-        facility: {
-          select: {
-            name: true,
-            administrativeArea: true,
-          },
-        },
         amendments: {
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -304,10 +298,10 @@ function createCertificateService(
         childName: `${record.child.firstName} ${record.child.lastName}`,
         childDOB: record.child.dateOfBirth,
         sex: record.child.sex,
-        state: metadata?.state || record.facility?.administrativeArea || '',
+        state: metadata?.state || '',
         lga: metadata?.lga || '',
         ward: metadata?.ward || '',
-        location: metadata?.facilityName || record.facility?.name || '',
+        location: metadata?.facilityName || '',
         provider: metadata?.vaccinatorName || '',
         vaccineCode: record.vaccineCode,
         doseNumber: record.doseNumber,
