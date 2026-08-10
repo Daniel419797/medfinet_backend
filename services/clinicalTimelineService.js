@@ -2,6 +2,10 @@ const { DomainError } = require('../utils/domainError');
 const { withTenantTransaction } = require('./tenantContext');
 const { audit } = require('./clinicalValidation');
 const {
+  readImmunizationSnapshots,
+  snapshotForEvidence,
+} = require('./certificateMetadataService');
+const {
   withoutImmunizationIntegrityFields,
 } = require('./immunizationIntegrity');
 
@@ -54,11 +58,19 @@ function createClinicalTimelineService(prismaClient) {
           orderBy: { scheduledFor: 'asc' },
         }),
       ]);
+      const snapshots = await readImmunizationSnapshots(
+        transaction,
+        context,
+        immunizations.map((record) => record.id)
+      );
       await transaction.auditEvent.create({
         data: audit(context, 'clinical-timeline.read', 'child', childId),
       });
       return {
-        immunizations: immunizations.map(withoutImmunizationIntegrityFields),
+        immunizations: immunizations.map((record) => ({
+          ...withoutImmunizationIntegrityFields(record),
+          certificateMetadata: snapshotForEvidence(snapshots.get(record.id) || null),
+        })),
         growth,
         alerts,
         allergies,
