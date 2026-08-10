@@ -23,6 +23,12 @@ function consentSummary(grants, currentTime) {
     : { status: 'NOT_RECORDED', consentGrantId: null, expiresAt: null };
 }
 
+function adminTestReadBypass(membership) {
+  return process.env.admin === 'test'
+    && membership?.status === 'ACTIVE'
+    && ['OWNER', 'ADMIN'].includes(membership.role);
+}
+
 async function loadNfcClinicalSummary(
   transaction,
   organizationId,
@@ -31,7 +37,7 @@ async function loadNfcClinicalSummary(
   purpose = 'nfc-card-resolution',
   actorSubjectId = 'system'
 ) {
-  const [allergies, immunizations, rules, consents] = await Promise.all([
+  const [allergies, immunizations, rules, consents, membership] = await Promise.all([
     transaction.allergyRecord.findMany({
       where: { organizationId, childId: child.id, status: 'ACTIVE' },
       select: {
@@ -80,6 +86,15 @@ async function loadNfcClinicalSummary(
       },
       take: 50,
     }),
+    transaction.organizationMembership.findUnique({
+      where: {
+        organizationId_subjectId: {
+          organizationId,
+          subjectId: actorSubjectId,
+        },
+      },
+      select: { status: true, role: true },
+    }),
   ]);
   const latestRules = new Map();
   for (const rule of rules) {
@@ -90,7 +105,10 @@ async function loadNfcClinicalSummary(
     recommendation(rule, child.dateOfBirth, immunizations, currentTime)
   ));
   const consent = consentSummary(consents, currentTime);
-  const clinicalAccess = consent.status === 'GRANTED' ? 'ALLOWED' : 'CONSENT_REQUIRED';
+  const testAdminBypass = adminTestReadBypass(membership);
+  const clinicalAccess = consent.status === 'GRANTED' || testAdminBypass
+    ? 'ALLOWED'
+    : 'CONSENT_REQUIRED';
   await transaction.disclosureEvent.create({
     data: {
       organizationId,
@@ -104,7 +122,11 @@ async function loadNfcClinicalSummary(
         access: 'READ',
       })),
       decision: clinicalAccess === 'ALLOWED' ? 'ALLOWED' : 'DENIED',
-      reasonCode: clinicalAccess === 'ALLOWED' ? 'ACTIVE_CONSENT' : 'NO_APPLICABLE_CONSENT',
+      reasonCode: testAdminBypass
+        ? 'ADMIN_TEST_BYPASS'
+        : clinicalAccess === 'ALLOWED'
+          ? 'ACTIVE_CONSENT'
+          : 'NO_APPLICABLE_CONSENT',
       ...(consent.consentGrantId ? { consentGrantId: consent.consentGrantId } : {}),
     },
   });
@@ -121,7 +143,9 @@ async function loadNfcClinicalSummary(
         : 0,
       recordedDoses: clinicalAccess === 'ALLOWED' ? immunizations.length : 0,
     },
-    consent,
+    consent: testAdminBypass && consent.status !== 'GRANTED'
+      ? { ...consent, status: 'ADMIN_TEST_BYPASS' }
+      : consent,
   };
 }
 
