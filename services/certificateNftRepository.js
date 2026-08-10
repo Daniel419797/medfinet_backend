@@ -29,8 +29,17 @@ function normalizeRow(row) {
 }
 
 class CertificateNftRepository {
-  constructor(prismaClient) {
-    this._prisma = prismaClient || require('../utils/prisma').prisma;
+  constructor(transactionClient) {
+    if (
+      !transactionClient
+      || typeof transactionClient.$queryRawUnsafe !== 'function'
+      || typeof transactionClient.$executeRawUnsafe !== 'function'
+    ) {
+      throw new Error(
+        'CertificateNftRepository requires a tenant-scoped Prisma transaction client',
+      );
+    }
+    this._prisma = transactionClient;
   }
 
   async findByProofId(organizationId, proofId) {
