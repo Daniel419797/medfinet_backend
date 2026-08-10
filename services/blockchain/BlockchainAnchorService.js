@@ -41,6 +41,9 @@ class BlockchainAnchorService {
     } catch (err) {
       throw new Error(`Anchor failed for ${anchorId}: ${err.message}`);
     }
+    if (!result.network || result.network !== this._adapter.networkId) {
+      throw new Error(`Anchor failed for ${anchorId}: anchoring network was not preserved`);
+    }
 
     const receipt = AnchorReceipt.fromAnchorResult(
       anchorId, eventCode, eventType.category, tenantId,
@@ -58,9 +61,15 @@ class BlockchainAnchorService {
       receipt.eventCode !== eventCode
       || receipt.anchorId !== anchorId
       || receipt.tenantId !== tenantId
+      || receipt.network !== this._adapter.networkId
     ) return false;
     try {
-      return (await inspectAnchorReceipt(receipt, this._adapter)).verified;
+      return (await inspectAnchorReceipt(receipt, this._adapter, {
+        eventCode,
+        anchorId,
+        tenantId,
+        network: receipt.network,
+      })).verified;
     } catch {
       return false;
     }

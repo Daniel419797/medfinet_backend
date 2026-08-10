@@ -4,6 +4,7 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const projectRoot = path.resolve(__dirname, '..');
+const validAlgorandMnemonic = `${'abandon '.repeat(24)}water`;
 
 const validEnvironment = {
   DOTENV_CONFIG_PATH: path.join(projectRoot, 'test', '.env.does-not-exist'),
@@ -80,6 +81,43 @@ test('loads validated environment configuration', () => {
   assert.equal(config.port, 3001);
   assert.deepEqual(config.corsOrigins, ['http://localhost:3000', 'https://app.example.com']);
   assert.equal(config.security.trustProxyHops, 1);
+  assert.equal(config.algorand.requestTimeoutMs, 10_000);
+});
+
+test('rejects invalid Algorand network allowlists', () => {
+  const result = loadConfig({
+    ALGORAND_ALLOWED_NETWORKS: 'testnet,invalid-network',
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /ALGORAND_ALLOWED_NETWORKS may contain only testnet and mainnet/,
+  );
+});
+
+test('requires HTTPS for every enabled Algorand production service URL', () => {
+  for (const override of [
+    { ALGORAND_TESTNET_ALGOD_SERVER: 'ftp://algod.example.com' },
+    { ALGORAND_TESTNET_EXPLORER_TRANSACTION_URL: 'javascript:alert(1)' },
+  ]) {
+    const result = loadConfig({
+      NODE_ENV: 'production',
+      ALGORAND_ENABLED: 'true',
+      ALGORAND_PLATFORM_WALLET_MNEMONIC: validAlgorandMnemonic,
+      ...override,
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /ALGORAND_TESTNET service URLs must use HTTPS/);
+  }
+});
+
+test('rejects an unsafe Algorand request timeout', () => {
+  const result = loadConfig({ ALGORAND_REQUEST_TIMEOUT_MS: '999' });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ALGORAND_REQUEST_TIMEOUT_MS must be an integer/);
 });
 
 test('fails closed when JWT_SECRET is missing', () => {

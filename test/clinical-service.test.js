@@ -81,7 +81,8 @@ test('records one vaccine dose with worker attribution, deduplication, audit, an
   const anchor = calls.find(([kind]) => kind === 'outbox')[1];
   assert.equal(anchor.eventType, 'BLOCKCHAIN_ANCHOR_REQUESTED');
   assert.equal(anchor.payload.eventCode, 0x09);
-  assert.match(anchor.payload.anchorId, /^immunization-recorded:immunization-1:[a-f0-9]{64}$/);
+  assert.match(anchor.payload.anchorId, /^immunization-recorded:v1:immunization-1:[a-f0-9]{64}$/);
+  assert.equal(anchor.idempotencyKey, 'blockchain:9:v1:immunization-1');
   assert.doesNotMatch(anchor.payload.anchorId, /BCG|LOT-1|child-1/);
 });
 

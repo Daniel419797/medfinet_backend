@@ -100,15 +100,17 @@ test('loads a tenant-scoped immunization and returns a PNG without publishing ch
   assert.deepEqual(Object.keys(qrPayload).sort(), [
     'algorandAnchorId',
     'fingerprint',
+    'fingerprintVersion',
     'recordId',
     'type',
     'version',
   ]);
   assert.equal(qrPayload.recordId, 'imm-1');
-  assert.equal(qrPayload.version, 2);
+  assert.equal(qrPayload.version, 3);
+  assert.equal(qrPayload.fingerprintVersion, 1);
   assert.match(
     qrPayload.algorandAnchorId,
-    /^immunization-recorded:imm-1:[a-f0-9]{64}$/,
+    /^immunization-recorded:v1:imm-1:[a-f0-9]{64}$/,
   );
   assert.equal(auditEvents[0].action, 'immunization-certificate.downloaded');
 });
@@ -134,7 +136,7 @@ test('queues an Algorand fingerprint anchor without publishing clinical data', a
         facility: null,
       }),
     },
-    anchorReceipt: { findUnique: async () => null },
+    anchorReceipt: { findFirst: async () => null },
     outboxEvent: {
       findUnique: async () => null,
       upsert: async ({ create }) => { queued = create; return create; },
@@ -159,8 +161,10 @@ test('queues an Algorand fingerprint anchor without publishing clinical data', a
   assert.equal(queued.payload.eventCode, 0x09);
   assert.match(
     queued.payload.anchorId,
-    /^immunization-recorded:imm-1:[a-f0-9]{64}$/,
+    /^immunization-recorded:v1:imm-1:[a-f0-9]{64}$/,
   );
+  assert.equal(result.fingerprintVersion, 1);
+  assert.equal(queued.idempotencyKey, 'blockchain:9:v1:imm-1');
   assert.equal(JSON.stringify(queued.payload).includes('Amina'), false);
   assert.equal(JSON.stringify(queued.payload).includes('BCG'), false);
   assert.equal(auditEvents[0].action, 'immunization-certificate.evidence-viewed');
@@ -194,7 +198,7 @@ test('uses the latest amendment anchor for an amended certificate', async () => 
         }],
       }),
     },
-    anchorReceipt: { findUnique: async () => null },
+    anchorReceipt: { findFirst: async () => null },
     outboxEvent: {
       findUnique: async () => null,
       upsert: async ({ create }) => { queued = create; return create; },
@@ -215,7 +219,7 @@ test('uses the latest amendment anchor for an amended certificate', async () => 
   assert.equal(queued.aggregateId, 'amendment-1');
   assert.match(
     queued.payload.anchorId,
-    /^immunization-amended:amendment-1:[a-f0-9]{64}$/,
+    /^immunization-amended:v1:amendment-1:[a-f0-9]{64}$/,
   );
   assert.equal(result.fingerprint, queued.payload.anchorId.split(':').at(-1));
 });
@@ -240,11 +244,12 @@ test('reports confirmed evidence only after the Algorand note is verified', asyn
       }),
     },
     anchorReceipt: {
-      findUnique: async ({ where }) => ({
+      findFirst: async ({ where }) => ({
         anchorId: where.anchorId,
         eventCode: 0x09,
         eventCategory: 'clinical',
         tenantId: 'org-1',
+        network: 'testnet',
         txId: 'ALGORAND-TX-1',
         blockHeight: 42n,
         isoTimestamp: '2026-01-10T08:01:00.000Z',
@@ -264,15 +269,35 @@ test('reports confirmed evidence only after the Algorand note is verified', asyn
       enabled: true,
       algodServer: 'https://testnet-api.algonode.cloud',
     },
-    inspectReceipt: async () => ({
+    inspectReceipt: async (_receipt, _settings, expected) => {
+      assert.match(
+        expected.anchorId,
+        /^immunization-recorded:v1:imm-1:[a-f0-9]{64}$/,
+      );
+      assert.equal(expected.eventCode, 0x09);
+      assert.equal(expected.tenantId, 'org-1');
+      assert.equal(expected.network, 'testnet');
+      assert.deepEqual(
+        Object.keys(expected).sort(),
+        ['anchorId', 'eventCode', 'network', 'tenantId'],
+      );
+      return ({
+      status: 'CONFIRMED',
+      reason: null,
+      receiptIntegrity: true,
+      networkIntegrity: true,
       hashIntegrity: true,
+      txIdIntegrity: true,
       noteIntegrity: true,
+      transactionIntegrity: true,
+      transactionLocated: true,
       chainConfirmed: true,
       verified: true,
       network: 'Algorand TestNet',
       networkId: 'testnet',
       explorerUrl: 'https://testnet.explorer.perawallet.app/tx/ALGORAND-TX-1',
-    }),
+      });
+    },
   });
 
   const result = await service.evidence(context, 'child-1', 'imm-1');
@@ -282,4 +307,165 @@ test('reports confirmed evidence only after the Algorand note is verified', asyn
   assert.equal(result.noteIntegrity, true);
   assert.equal(result.txId, 'ALGORAND-TX-1');
   assert.equal(result.blockHeight, '42');
+});
+
+function evidenceRecord() {
+  return {
+    id: 'imm-1',
+    organizationId: 'org-1',
+    childId: 'child-1',
+    facilityId: null,
+    programmeId: null,
+    vaccineCode: 'BCG',
+    doseNumber: 1,
+    administeredAt: new Date('2026-01-10T08:00:00.000Z'),
+    status: 'ACTIVE',
+    administeringSubjectId: 'worker-1',
+    child: { firstName: 'Amina', lastName: 'Okafor' },
+    facility: null,
+  };
+}
+
+function recoveryTransaction(existing, onUpdateMany) {
+  return {
+    $executeRawUnsafe: async () => undefined,
+    immunizationRecord: { findFirst: async () => evidenceRecord() },
+    anchorReceipt: { findFirst: async () => null },
+    outboxEvent: {
+      findUnique: async () => existing,
+      upsert: async () => {
+        throw new Error('existing evidence must not be inserted again');
+      },
+      updateMany: onUpdateMany,
+    },
+    auditEvent: { create: async ({ data }) => data },
+  };
+}
+
+test('atomically requeues legacy published evidence when no receipt exists', async () => {
+  const currentTime = new Date('2026-08-10T12:00:00.000Z');
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'PUBLISHED',
+    attempts: 1,
+    nextAttemptAt: new Date('2026-08-10T11:00:00.000Z'),
+  };
+  let recovery;
+  const transaction = recoveryTransaction(existing, async (input) => {
+    recovery = input;
+    return { count: 1 };
+  });
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => currentTime,
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.status, 'PENDING');
+  assert.equal(result.queued, true);
+  assert.deepEqual(recovery.where, {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'PUBLISHED',
+    attempts: 1,
+    nextAttemptAt: { lte: currentTime },
+  });
+  assert.equal(recovery.data.status, 'PENDING');
+});
+
+test('does not bypass retry backoff for failed evidence', async () => {
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'FAILED',
+    attempts: 3,
+    nextAttemptAt: new Date('2026-08-10T12:05:00.000Z'),
+  };
+  let updated = false;
+  const transaction = recoveryTransaction(existing, async () => {
+    updated = true;
+    return { count: 1 };
+  });
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => new Date('2026-08-10T12:00:00.000Z'),
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.queued, false);
+  assert.equal(updated, false);
+});
+
+test('does not requeue published evidence before its eligibility time', async () => {
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'PUBLISHED',
+    attempts: 1,
+    nextAttemptAt: new Date('2026-08-10T12:05:00.000Z'),
+  };
+  let updated = false;
+  const transaction = recoveryTransaction(existing, async () => {
+    updated = true;
+    return { count: 1 };
+  });
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => new Date('2026-08-10T12:00:00.000Z'),
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.queued, false);
+  assert.equal(updated, false);
+});
+
+test('reports not queued when optimistic evidence recovery loses the race', async () => {
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'PUBLISHED',
+    attempts: 1,
+    nextAttemptAt: new Date('2026-08-10T11:00:00.000Z'),
+  };
+  const transaction = recoveryTransaction(existing, async () => ({ count: 0 }));
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+    now: () => new Date('2026-08-10T12:00:00.000Z'),
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.queued, false);
+});
+
+test('never resets evidence while an outbox worker owns the processing lock', async () => {
+  const existing = {
+    id: 'outbox-1',
+    organizationId: 'org-1',
+    status: 'PROCESSING',
+    attempts: 2,
+    lockedBy: 'worker-1',
+  };
+  let updated = false;
+  const transaction = recoveryTransaction(existing, async () => {
+    updated = true;
+    return { count: 1 };
+  });
+  const database = { $transaction: async (operation) => operation(transaction) };
+  const service = createCertificateService(database, async () => Buffer.alloc(0), {
+    algorand: { enabled: true, algodServer: 'invalid' },
+  });
+
+  const result = await service.evidence(context, 'child-1', 'imm-1');
+
+  assert.equal(result.queued, false);
+  assert.equal(updated, false);
 });

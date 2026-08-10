@@ -44,11 +44,11 @@ test('runtime source contains no embedded credentials or direct environment acce
   }
 });
 
-test('vaccination issuance does not publish clinical payloads or certificates', () => {
+test('legacy vaccination asset publication is disabled', () => {
   const algorandSource = fs.readFileSync(path.join(projectRoot, 'algorand', 'algorand.js'), 'utf8');
-  const controllerSource = fs.readFileSync(path.join(projectRoot, 'controllers', 'vaccination.js'), 'utf8');
+  const legacyController = path.join(projectRoot, 'controllers', 'vaccination.js');
 
-  assert.doesNotMatch(algorandSource, /JSON\.stringify\(vaccinationData\)/);
-  assert.doesNotMatch(controllerSource, /createVaccinationAssetImage|uploadToIPFS|generateCertificate/);
-  assert.match(algorandSource, /proofHash/);
+  assert.doesNotMatch(algorandSource, /makeAssetCreateTxn|assetName|assetURL|assetMetadataHash/);
+  assert.equal(fs.existsSync(legacyController), false);
+  assert.match(algorandSource, /CLINICAL_ASA_PUBLICATION_DISABLED/);
 });

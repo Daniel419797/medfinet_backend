@@ -68,6 +68,31 @@ test('claims one due event with an optimistic lock', async () => {
   assert.equal(calls[1][2].lockedBy, 'worker-1');
 });
 
+test('leaves disabled event types pending instead of publishing them as skipped', async () => {
+  let candidateWhere;
+  const tx = transaction({
+    outboxEvent: {
+      async updateMany() {
+        return { count: 0 };
+      },
+      async findFirst({ where }) {
+        candidateWhere = where;
+        return null;
+      },
+    },
+  });
+  const service = createOutboxService(databaseWithTransaction(tx), {
+    excludedEventTypes: ['BLOCKCHAIN_ANCHOR_REQUESTED'],
+  });
+
+  const claimed = await service.claimNext(context(), 'worker-1');
+
+  assert.equal(claimed, null);
+  assert.deepEqual(candidateWhere.eventType, {
+    notIn: ['BLOCKCHAIN_ANCHOR_REQUESTED'],
+  });
+});
+
 test('publishes a successfully handled event', async () => {
   const updates = [];
   const tx = transaction({

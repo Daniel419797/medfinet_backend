@@ -1,18 +1,36 @@
 const config = require('../config');
+const { logger } = require('../utils/logger');
+const { DomainError } = require('../utils/domainError');
 const AnchorReceiptRepository = require('../services/anchorReceiptRepository');
+const { inspectAnchorReceipt } = require('../services/blockchain/receiptVerification');
+const { eventCodeForAnchorId } = require('../services/blockchain/eventTypes');
 const {
   defaultNetwork,
   getNetworkConfig,
   networkFromRequest,
+  requestedNetworkFromRequest,
+  resolveNetwork,
   listAvailableNetworks,
 } = require('../services/blockchain/networkRegistry');
 
 const receiptStore = new AnchorReceiptRepository();
+const adapterCache = new Map();
+
+function adapterForNetwork(network) {
+  if (!adapterCache.has(network)) {
+    const AlgorandAdapter = require('../services/blockchain/adapters/AlgorandAdapter');
+    adapterCache.set(network, new AlgorandAdapter(getNetworkConfig(network)));
+  }
+  return adapterCache.get(network);
+}
 
 async function getAnchor(req, res, next) {
   try {
     const { anchorId } = req.params;
-    const receipt = await receiptStore.findByAnchorId(anchorId);
+    const receipt = await receiptStore.findByAnchorIdForTenant(
+      anchorId,
+      req.organization.id
+    );
     if (!receipt) {
       return res.status(404).json({
         success: false,
@@ -43,7 +61,10 @@ async function listAnchors(req, res, next) {
 async function verifyAnchor(req, res, next) {
   try {
     const { anchorId } = req.params;
-    const receipt = await receiptStore.findByAnchorId(anchorId);
+    const receipt = await receiptStore.findByAnchorIdForTenant(
+      anchorId,
+      req.organization.id
+    );
     if (!receipt) {
       return res.status(404).json({
         success: false,
@@ -51,28 +72,88 @@ async function verifyAnchor(req, res, next) {
         message: 'Anchor not found',
       });
     }
-    const { verifyHash } = require('../services/blockchain/eventTypes');
-    const hashOk = verifyHash(
-      receipt.eventCode,
-      receipt.tenantId,
-      receipt.anchorId,
-      receipt.timestamp,
-      receipt.nonce,
-      receipt.hash
-    );
-    return res.json({
-      success: true,
-      data: {
-        anchorId: receipt.anchorId,
-        eventCode: receipt.eventCode,
-        eventCategory: receipt.eventCategory,
-        txId: receipt.txId,
-        blockHeight: receipt.blockHeight,
-        confirmedAt: receipt.confirmedAt,
-        hashIntegrity: hashOk,
-        status: receipt.status,
-      },
-    });
+    const base = {
+      anchorId: receipt.anchorId,
+      eventCode: receipt.eventCode,
+      eventCategory: receipt.eventCategory,
+      txId: receipt.txId,
+      blockHeight: receipt.blockHeight == null ? null : String(receipt.blockHeight),
+      confirmedAt: receipt.confirmedAt,
+      receiptIntegrity: null,
+      networkIntegrity: null,
+      hashIntegrity: null,
+      txIdIntegrity: null,
+      noteIntegrity: null,
+      transactionIntegrity: null,
+      transactionLocated: null,
+      chainConfirmed: null,
+      network: receipt.network || null,
+      networkId: receipt.network || null,
+      explorerUrl: null,
+      reason: null,
+    };
+    if (!config.algorand.enabled) {
+      return res.json({ success: true, data: { ...base, status: 'DISABLED' } });
+    }
+
+    if (!receipt.network) {
+      return res.json({
+        success: true,
+        data: { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNKNOWN' },
+      });
+    }
+
+    let selectedNetwork;
+    try {
+      selectedNetwork = resolveNetwork(receipt.network);
+    } catch (error) {
+      logger.warn('blockchain.anchor-network-unavailable', {
+        anchorId,
+        storedNetwork: receipt.network,
+      });
+      return res.json({
+        success: true,
+        data: { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNAVAILABLE' },
+      });
+    }
+    const requestedNetwork = requestedNetworkFromRequest(req);
+    if (requestedNetwork && resolveNetwork(requestedNetwork) !== selectedNetwork) {
+      throw new DomainError(
+        409,
+        'ALGORAND_ANCHOR_NETWORK_MISMATCH',
+        `Anchor ${anchorId} was submitted to ${selectedNetwork}`,
+      );
+    }
+    const expectedEventCode = eventCodeForAnchorId(anchorId);
+    if (!expectedEventCode) {
+      return res.json({
+        success: true,
+        data: { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_FORMAT_UNSUPPORTED' },
+      });
+    }
+    try {
+      const inspected = await inspectAnchorReceipt(
+        receipt,
+        adapterForNetwork(selectedNetwork),
+        {
+          anchorId,
+          eventCode: expectedEventCode,
+          tenantId: req.organization.id,
+          network: selectedNetwork,
+        }
+      );
+      return res.json({
+        success: true,
+        data: { ...base, ...inspected },
+      });
+    } catch (error) {
+      logger.warn('blockchain.anchor-verification-unavailable', {
+        anchorId,
+        errorType: error?.name || 'Error',
+        errorCode: error?.code || null,
+      });
+      return res.json({ success: true, data: { ...base, status: 'UNAVAILABLE' } });
+    }
   } catch (error) {
     return next(error);
   }

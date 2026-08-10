@@ -6,11 +6,14 @@ const { EVENT_TYPES } = require('./blockchain/eventTypes');
 const { inspectAnchorReceipt } = require('./blockchain/receiptVerification');
 const { audit } = require('./clinicalValidation');
 const {
+  IMMUNIZATION_FINGERPRINT_VERSION,
   amendedImmunizationAnchorId,
   recordedImmunizationAnchorId,
 } = require('./immunizationIntegrity');
 const { assertResourceScope } = require('./resourceScopeService');
 const { withTenantTransaction } = require('./tenantContext');
+
+const adapterCache = new WeakMap();
 
 function safeFilenamePart(value) {
   return String(value || 'record')
@@ -38,6 +41,7 @@ function proofMaterial(record) {
     anchorId,
     aggregateId: amendment?.id || record.id,
     eventCode: event.code,
+    fingerprintVersion: IMMUNIZATION_FINGERPRINT_VERSION,
     fingerprint: anchorId.slice(anchorId.lastIndexOf(':') + 1),
   };
 }
@@ -52,7 +56,7 @@ function anchorOutboxData(record, proof = proofMaterial(record)) {
     eventType: 'BLOCKCHAIN_ANCHOR_REQUESTED',
     aggregateType: 'blockchain-anchor',
     aggregateId: proof.aggregateId,
-    idempotencyKey: `blockchain:${proof.eventCode}:${proof.aggregateId}`,
+    idempotencyKey: `blockchain:${proof.eventCode}:v${proof.fingerprintVersion}:${proof.aggregateId}`,
     payload: {
       eventCode: proof.eventCode,
       anchorId: proof.anchorId,
@@ -74,12 +78,73 @@ function networkLabel(settings) {
   return 'Algorand';
 }
 
-async function defaultInspectReceipt(receipt, settings) {
+async function defaultInspectReceipt(receipt, settings, expected) {
   const AlgorandAdapter = require('./blockchain/adapters/AlgorandAdapter');
+  let adapter = adapterCache.get(settings);
+  if (!adapter) {
+    adapter = new AlgorandAdapter(settings);
+    adapterCache.set(settings, adapter);
+  }
   return inspectAnchorReceipt(
     AnchorReceipt.fromDatabase(receipt),
-    new AlgorandAdapter(settings),
+    adapter,
+    expected,
   );
+}
+
+function networkSettingsForReceipt(settings, receipt) {
+  if (!receipt?.network) return null;
+  if (settings.network) {
+    return settings.network === receipt.network ? settings : null;
+  }
+  if (settings.networks) {
+    try {
+      return require('./blockchain/networkRegistry').getNetworkConfig(receipt.network);
+    } catch {
+      return null;
+    }
+  }
+  return Object.freeze({ ...settings, network: receipt.network });
+}
+
+async function queueMissingEvidence(transaction, record, proof, currentTime) {
+  const outboxData = anchorOutboxData(record, proof);
+  const where = {
+    organizationId_idempotencyKey: {
+      organizationId: record.organizationId,
+      idempotencyKey: outboxData.idempotencyKey,
+    },
+  };
+  const existing = await transaction.outboxEvent.findUnique({ where });
+  if (!existing) {
+    await transaction.outboxEvent.upsert({ where, create: outboxData, update: {} });
+    return true;
+  }
+  if (existing.status !== 'PUBLISHED') return false;
+  if (
+    existing.nextAttemptAt
+    && new Date(existing.nextAttemptAt).valueOf() > currentTime.valueOf()
+  ) return false;
+
+  const recovered = await transaction.outboxEvent.updateMany({
+    where: {
+      id: existing.id,
+      organizationId: record.organizationId,
+      status: existing.status,
+      attempts: existing.attempts,
+      nextAttemptAt: { lte: currentTime },
+    },
+    data: {
+      status: 'PENDING',
+      attempts: 0,
+      nextAttemptAt: currentTime,
+      lockedAt: null,
+      lockedBy: null,
+      publishedAt: null,
+      lastError: null,
+    },
+  });
+  return recovered.count === 1;
 }
 
 function createCertificateService(
@@ -154,9 +219,10 @@ function createCertificateService(
       const proof = proofMaterial(record);
       const verificationValue = JSON.stringify({
         type: 'MEDFINET_VACCINATION_CERTIFICATE',
-        version: 2,
+        version: 3,
         recordId: record.id,
         fingerprint: proof.fingerprint,
+        fingerprintVersion: proof.fingerprintVersion,
         algorandAnchorId: proof.anchorId,
       });
       const buffer = await renderer({
@@ -204,48 +270,19 @@ function createCertificateService(
           immunizationId,
         );
         const material = proofMaterial(record);
-        const { anchorId, fingerprint } = material;
-        const receipt = await transaction.anchorReceipt.findUnique({
-          where: { anchorId },
+        const { anchorId, fingerprint, fingerprintVersion } = material;
+        const receipt = await transaction.anchorReceipt.findFirst({
+          where: { anchorId, tenantId: context.organizationId },
         });
         let queued = false;
         if (settings.enabled && !receipt) {
-          const outboxData = anchorOutboxData(record, material);
-          const existing = await transaction.outboxEvent.findUnique({
-            where: {
-              organizationId_idempotencyKey: {
-                organizationId: context.organizationId,
-                idempotencyKey: outboxData.idempotencyKey,
-              },
-            },
-          });
-          if (!existing) {
-            await transaction.outboxEvent.upsert({
-              where: {
-                organizationId_idempotencyKey: {
-                  organizationId: context.organizationId,
-                  idempotencyKey: outboxData.idempotencyKey,
-                },
-              },
-              create: outboxData,
-              update: {},
-            });
-            queued = true;
-          } else if (existing.status === 'FAILED') {
-            await transaction.outboxEvent.update({
-              where: { id: existing.id },
-              data: {
-                status: 'PENDING',
-                attempts: 0,
-                nextAttemptAt: new Date(),
-                lockedAt: null,
-                lockedBy: null,
-                publishedAt: null,
-                lastError: null,
-              },
-            });
-            queued = true;
-          }
+          const currentTime = options.now ? options.now() : new Date();
+          queued = await queueMissingEvidence(
+            transaction,
+            record,
+            material,
+            currentTime,
+          );
         }
         await transaction.auditEvent.create({
           data: audit(
@@ -256,42 +293,67 @@ function createCertificateService(
             { childId, fingerprint, anchorId },
           ),
         });
-        return { anchorId, fingerprint, receipt, queued };
+        return {
+          anchorId,
+          eventCode: material.eventCode,
+          fingerprint,
+          fingerprintVersion,
+          receipt,
+          queued,
+        };
       },
     );
 
+    const receiptSettings = proof.receipt
+      ? networkSettingsForReceipt(settings, proof.receipt)
+      : settings;
     const base = {
       recordId: immunizationId,
       fingerprint: proof.fingerprint,
+      fingerprintVersion: proof.fingerprintVersion,
       anchorId: proof.anchorId,
       queued: proof.queued,
-      network: settings.enabled ? networkLabel(settings) : null,
+      network: settings.enabled && receiptSettings ? networkLabel(receiptSettings) : null,
+      networkId: proof.receipt?.network || settings.network || settings.defaultNetwork || null,
       txId: proof.receipt?.txId || null,
       blockHeight: proof.receipt?.blockHeight == null
         ? null
         : String(proof.receipt.blockHeight),
       confirmedAt: proof.receipt?.confirmedAt || null,
       explorerUrl: null,
+      receiptIntegrity: null,
+      networkIntegrity: null,
       hashIntegrity: null,
+      txIdIntegrity: null,
       noteIntegrity: null,
+      transactionIntegrity: null,
+      transactionLocated: null,
       chainConfirmed: null,
+      reason: null,
     };
     if (!settings.enabled) return { ...base, status: 'DISABLED' };
     if (!proof.receipt) return { ...base, status: 'PENDING' };
+    if (!proof.receipt.network) {
+      return { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNKNOWN' };
+    }
+    if (!receiptSettings) {
+      return { ...base, status: 'UNAVAILABLE', reason: 'ANCHOR_NETWORK_UNAVAILABLE' };
+    }
 
     try {
       const inspected = await (options.inspectReceipt || defaultInspectReceipt)(
         proof.receipt,
-        settings,
+        receiptSettings,
+        {
+          anchorId: proof.anchorId,
+          eventCode: proof.eventCode,
+          tenantId: context.organizationId,
+          network: proof.receipt.network,
+        },
       );
       return {
         ...base,
         ...inspected,
-        status: inspected.verified
-          ? 'CONFIRMED'
-          : inspected.hashIntegrity && inspected.noteIntegrity
-            ? 'UNCONFIRMED'
-            : 'MISMATCH',
       };
     } catch (error) {
       logger.warn('certificate.algorand-proof-unavailable', {
