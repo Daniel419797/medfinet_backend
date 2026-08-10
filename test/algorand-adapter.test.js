@@ -153,3 +153,88 @@ test('bounds stalled algod transaction lookups', async () => {
     (error) => error.code === 'ALGORAND_REQUEST_TIMEOUT',
   );
 });
+
+test('mints a 1-of-1 immutable certificate asset using only the fingerprint as metadata hash', async () => {
+  let assetInput;
+  const fingerprint = Buffer.from('ab'.repeat(32), 'hex');
+  const client = {
+    getTransactionParams: () => ({ do: async () => ({ minFee: 1_000 }) }),
+    sendRawTransaction: () => ({ do: async () => ({ txid: 'NFT-TX-1' }) }),
+  };
+  const sdk = {
+    makeAssetCreateTxnWithSuggestedParamsFromObject(input) {
+      assetInput = input;
+      return { signTxn: () => Buffer.from('signed-nft') };
+    },
+    waitForConfirmation: async () => ({
+      confirmedRound: 99n,
+      assetIndex: 123456n,
+    }),
+  };
+  const account = { addr: 'PLATFORM-ACCOUNT', sk: Buffer.from('secret') };
+  const adapter = new AlgorandAdapter(config(), {
+    sdk,
+    client,
+    platformAccount: account,
+  });
+
+  const result = await adapter.mintCertificateNft({
+    metadataHash: fingerprint,
+    assetName: 'Medfinet Vaccine Certificate',
+    unitName: 'MFVAX',
+  });
+
+  assert.equal(assetInput.sender, account.addr);
+  assert.equal(assetInput.total, 1n);
+  assert.equal(assetInput.decimals, 0);
+  assert.equal(assetInput.defaultFrozen, false);
+  assert.equal(assetInput.assetName, 'Medfinet Vaccine Certificate');
+  assert.equal(assetInput.unitName, 'MFVAX');
+  assert.deepEqual(Buffer.from(assetInput.assetMetadataHash), fingerprint);
+  for (const field of ['assetURL', 'manager', 'reserve', 'freeze', 'clawback', 'note']) {
+    assert.equal(Object.hasOwn(assetInput, field), false, `${field} must not publish certificate data`);
+  }
+  assert.equal(result.assetId, 123456n);
+  assert.equal(result.txId, 'NFT-TX-1');
+  assert.equal(result.blockHeight, 99n);
+  assert.equal(result.network, 'testnet');
+  assert.equal(result.creatorAddress, 'PLATFORM-ACCOUNT');
+});
+
+test('reads certificate asset parameters needed for on-chain verification', async () => {
+  const client = {
+    getAssetByID: (assetId) => ({
+      do: async () => ({
+        index: assetId,
+        params: {
+          creator: 'PLATFORM-ACCOUNT',
+          total: 1n,
+          decimals: 0,
+          defaultFrozen: false,
+          unitName: 'MFVAX',
+          name: 'Medfinet Vaccine Certificate',
+          metadataHash: Uint8Array.from(Buffer.from('cd'.repeat(32), 'hex')),
+        },
+      }),
+    }),
+  };
+  const adapter = new AlgorandAdapter(config(), {
+    sdk: {},
+    client,
+    platformAccount: { addr: 'PLATFORM-ACCOUNT', sk: Buffer.from('secret') },
+  });
+
+  const asset = await adapter.getAsset(987n);
+
+  assert.equal(asset.lookupStatus, 'FOUND');
+  assert.equal(asset.assetId, 987n);
+  assert.equal(asset.creator, 'PLATFORM-ACCOUNT');
+  assert.equal(asset.total, 1n);
+  assert.equal(asset.decimals, 0);
+  assert.equal(asset.url, null);
+  assert.equal(asset.manager, null);
+  assert.equal(asset.reserve, null);
+  assert.equal(asset.freeze, null);
+  assert.equal(asset.clawback, null);
+  assert.equal(asset.metadataHash.length, 32);
+});
