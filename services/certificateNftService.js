@@ -46,7 +46,7 @@ function certificateNftOutboxData(record, proof) {
     eventType: 'BLOCKCHAIN_CERTIFICATE_NFT_REQUESTED',
     aggregateType: 'certificate-nft',
     aggregateId: proof.aggregateId,
-    idempotencyKey: `certificate-nft:v${proof.fingerprintVersion}:${proof.aggregateId}`,
+    idempotencyKey: `certificate-nft:v${proof.fingerprintVersion}:${proof.aggregateId}:${proof.fingerprint}`,
     payload: {
       immunizationId: record.id,
       proofId: proof.anchorId,
@@ -69,9 +69,134 @@ function receiptMatches(receipt, input, network) {
   );
 }
 
+function validateConfirmedMint(result, prepared, network) {
+  const assetId = asBigInt(result?.assetId);
+  if (!assetId || assetId <= 0n || !positiveRound(result?.blockHeight)) {
+    throw new DomainError(502, 'CERTIFICATE_NFT_MINT_UNCONFIRMED', 'Algorand did not return a confirmed certificate NFT');
+  }
+  if (
+    result.network !== network
+    || result.txId !== prepared.txId
+    || !result.creatorAddress
+    || result.creatorAddress !== prepared.creatorAddress
+  ) {
+    throw new DomainError(502, 'CERTIFICATE_NFT_MINT_INVALID', 'Algorand returned incomplete certificate NFT evidence');
+  }
+  return assetId;
+}
+
 function createCertificateNftService(adapter, repository, options = {}) {
   const receiptStore = repository || new CertificateNftRepository();
   const now = options.now || (() => new Date());
+
+  async function finalize(input, network, receipt, result) {
+    const prepared = {
+      txId: receipt.txId,
+      creatorAddress: receipt.creatorAddress,
+    };
+    const assetId = validateConfirmedMint(result, prepared, network);
+    const confirmation = await receiptStore.confirm(
+      input.organizationId,
+      input.proofId,
+      receipt.txId,
+      {
+        assetId,
+        blockHeight: result.blockHeight,
+        confirmedAt: now(),
+      },
+    );
+    const stored = confirmation.receipt;
+    if (!receiptMatches(stored, input, network)) {
+      throw new DomainError(
+        409,
+        'CERTIFICATE_NFT_RECEIPT_MISMATCH',
+        'Certificate NFT receipt conflicted with the current vaccination proof',
+      );
+    }
+    if (!confirmation.updated) {
+      const sameConfirmedMint = stored?.status === 'CONFIRMED'
+        && asBigInt(stored.assetId) === assetId
+        && stored.txId === receipt.txId;
+      if (!sameConfirmedMint) {
+        throw new DomainError(
+          409,
+          'CERTIFICATE_NFT_MINT_COLLISION',
+          'Certificate NFT confirmation conflicted with an existing mint receipt',
+        );
+      }
+    }
+    return stored;
+  }
+
+  async function resumePending(input, network, receipt) {
+    if (!receiptMatches(receipt, input, network)) {
+      throw new DomainError(
+        409,
+        'CERTIFICATE_NFT_RECEIPT_MISMATCH',
+        'Stored certificate NFT intent does not match the current vaccination proof',
+      );
+    }
+    if (receipt.status === 'CONFIRMED') return receipt;
+    if (receipt.status !== 'PENDING' || !receipt.txId || !receipt.creatorAddress) {
+      throw new DomainError(
+        409,
+        'CERTIFICATE_NFT_RECEIPT_INVALID',
+        'Stored certificate NFT intent is incomplete',
+      );
+    }
+
+    const chainTransaction = await adapter.getTransaction(receipt.txId);
+    if (chainTransaction?.lookupStatus === 'FOUND') {
+      const createdAssetId = asBigInt(chainTransaction.createdAssetId);
+      if (
+        chainTransaction.txId !== receipt.txId
+        || chainTransaction.type !== 'acfg'
+        || chainTransaction.sender !== receipt.creatorAddress
+        || chainTransaction.signer !== receipt.creatorAddress
+      ) {
+        throw new DomainError(
+          409,
+          'CERTIFICATE_NFT_MINT_TRANSACTION_MISMATCH',
+          'Stored certificate NFT transaction does not match Algorand',
+        );
+      }
+      if (!chainTransaction.confirmed || !positiveRound(chainTransaction.confirmedRound)) {
+        throw new DomainError(
+          503,
+          'CERTIFICATE_NFT_MINT_PENDING',
+          'Certificate NFT transaction is awaiting Algorand confirmation',
+        );
+      }
+      if (!createdAssetId || createdAssetId <= 0n) {
+        throw new DomainError(
+          502,
+          'CERTIFICATE_NFT_MINT_INVALID',
+          'Confirmed certificate NFT transaction did not create an asset',
+        );
+      }
+      return finalize(input, network, receipt, {
+        assetId: createdAssetId,
+        txId: receipt.txId,
+        blockHeight: chainTransaction.confirmedRound,
+        network,
+        creatorAddress: receipt.creatorAddress,
+      });
+    }
+
+    if (!receipt.signedTransaction) {
+      throw new DomainError(
+        503,
+        'CERTIFICATE_NFT_RECONCILIATION_REQUIRED',
+        'Certificate NFT mint intent cannot be safely resubmitted',
+      );
+    }
+    const result = await adapter.submitPreparedCertificateNft({
+      txId: receipt.txId,
+      signedTransaction: Buffer.from(receipt.signedTransaction, 'base64'),
+      creatorAddress: receipt.creatorAddress,
+    });
+    return finalize(input, network, receipt, result);
+  }
 
   async function mint(input) {
     validateMintInput(input);
@@ -81,51 +206,50 @@ function createCertificateNftService(adapter, repository, options = {}) {
     }
 
     const existing = await receiptStore.findByProofId(input.organizationId, input.proofId);
-    if (existing) {
-      if (!receiptMatches(existing, input, network)) {
-        throw new DomainError(
-          409,
-          'CERTIFICATE_NFT_RECEIPT_MISMATCH',
-          'Stored certificate NFT evidence does not match the current vaccination proof',
-        );
-      }
-      return existing;
-    }
+    if (existing) return resumePending(input, network, existing);
 
-    const result = await adapter.mintCertificateNft({
+    const prepared = await adapter.prepareCertificateNft({
       metadataHash: Buffer.from(input.fingerprint, 'hex'),
       assetName: CERTIFICATE_NFT_ASSET_NAME,
       unitName: CERTIFICATE_NFT_UNIT_NAME,
     });
-    const assetId = asBigInt(result?.assetId);
-    if (!assetId || assetId <= 0n || !positiveRound(result?.blockHeight)) {
-      throw new DomainError(502, 'CERTIFICATE_NFT_MINT_UNCONFIRMED', 'Algorand did not return a confirmed certificate NFT');
-    }
-    if (result.network !== network || !result.txId || !result.creatorAddress) {
-      throw new DomainError(502, 'CERTIFICATE_NFT_MINT_INVALID', 'Algorand returned incomplete certificate NFT evidence');
+    if (
+      prepared?.network !== network
+      || !prepared?.txId
+      || !prepared?.creatorAddress
+      || !prepared?.signedTransaction
+    ) {
+      throw new DomainError(
+        502,
+        'CERTIFICATE_NFT_PREPARATION_INVALID',
+        'Algorand returned an incomplete certificate NFT mint intent',
+      );
     }
 
-    const stored = await receiptStore.save({
+    const pending = await receiptStore.createPending({
       organizationId: input.organizationId,
       immunizationId: input.immunizationId,
       proofId: input.proofId,
       fingerprintVersion: input.fingerprintVersion,
       fingerprint: input.fingerprint,
       network,
-      assetId,
-      txId: result.txId,
-      blockHeight: result.blockHeight,
-      creatorAddress: result.creatorAddress,
-      confirmedAt: now(),
+      txId: prepared.txId,
+      creatorAddress: prepared.creatorAddress,
+      signedTransaction: Buffer.from(prepared.signedTransaction).toString('base64'),
     });
-    if (!receiptMatches(stored, input, network)) {
+    if (!pending.receipt) {
       throw new DomainError(
-        409,
-        'CERTIFICATE_NFT_RECEIPT_MISMATCH',
-        'Certificate NFT receipt conflicted with an existing proof',
+        503,
+        'CERTIFICATE_NFT_RECEIPT_UNAVAILABLE',
+        'Certificate NFT mint intent could not be persisted',
       );
     }
-    return stored;
+    if (!pending.inserted) {
+      return resumePending(input, network, pending.receipt);
+    }
+
+    const result = await adapter.submitPreparedCertificateNft(prepared);
+    return finalize(input, network, pending.receipt, result);
   }
 
   return { mint };
@@ -143,6 +267,7 @@ function emptyInspection(receipt, adapter, overrides = {}) {
     networkId: adapter?.networkId || receipt?.network || null,
     explorerUrl: receipt?.txId && adapter ? adapter.getExplorerUrl(receipt.txId) : null,
     receiptIntegrity: false,
+    networkIntegrity: null,
     transactionIntegrity: null,
     assetIntegrity: null,
     metadataIntegrity: null,
@@ -156,12 +281,9 @@ function emptyInspection(receipt, adapter, overrides = {}) {
 
 async function inspectCertificateNftReceipt(receipt, adapter, expected) {
   if (!receipt || !adapter || !expected) return emptyInspection(receipt, adapter);
-  const expectedAssetId = asBigInt(receipt.assetId);
   const networkIntegrity = receipt.network === expected.network && adapter.networkId === expected.network;
-  const receiptIntegrity = Boolean(
-    expectedAssetId
-    && expectedAssetId > 0n
-    && receipt.organizationId === expected.organizationId
+  const proofIntegrity = Boolean(
+    receipt.organizationId === expected.organizationId
     && receipt.immunizationId === expected.immunizationId
     && receipt.proofId === expected.proofId
     && receipt.fingerprintVersion === expected.fingerprintVersion
@@ -169,10 +291,35 @@ async function inspectCertificateNftReceipt(receipt, adapter, expected) {
     && networkIntegrity
     && receipt.txId
   );
-  if (!receiptIntegrity) {
+  if (!proofIntegrity) {
     return emptyInspection(receipt, adapter, {
       status: 'MISMATCH',
       reason: 'NFT_RECEIPT_CLAIM_MISMATCH',
+      receiptIntegrity: false,
+      networkIntegrity,
+    });
+  }
+  if (receipt.status === 'PENDING') {
+    return emptyInspection(receipt, adapter, {
+      status: 'PENDING',
+      reason: null,
+      receiptIntegrity: true,
+      networkIntegrity,
+    });
+  }
+
+  const expectedAssetId = asBigInt(receipt.assetId);
+  const receiptIntegrity = Boolean(
+    receipt.status === 'CONFIRMED'
+    && expectedAssetId
+    && expectedAssetId > 0n
+    && receipt.blockHeight != null
+    && receipt.confirmedAt
+  );
+  if (!receiptIntegrity) {
+    return emptyInspection(receipt, adapter, {
+      status: 'MISMATCH',
+      reason: 'NFT_RECEIPT_CONFIRMATION_INVALID',
       receiptIntegrity: false,
       networkIntegrity,
     });
@@ -193,9 +340,10 @@ async function inspectCertificateNftReceipt(receipt, adapter, expected) {
   if (transaction?.lookupStatus !== 'FOUND') {
     return emptyInspection(receipt, adapter, {
       status: 'UNAVAILABLE',
-      reason: transaction?.unavailableReason || 'NFT_MINT_TRANSACTION_LOOKUP_UNAVAILABLE',
+      reason: 'NFT_MINT_TRANSACTION_LOOKUP_UNAVAILABLE',
       receiptIntegrity,
       networkIntegrity,
+      assetIntegrity: null,
     });
   }
 
@@ -231,14 +379,17 @@ async function inspectCertificateNftReceipt(receipt, adapter, expected) {
   );
   const chainConfirmed = transaction.confirmed === true
     && positiveRound(transaction.confirmedRound);
-  const verified = receiptIntegrity
+  const integrityVerified = receiptIntegrity
     && assetIntegrity
-    && transactionIntegrity
-    && chainConfirmed;
+    && transactionIntegrity;
+  const status = integrityVerified
+    ? (chainConfirmed ? 'CONFIRMED' : 'UNCONFIRMED')
+    : 'MISMATCH';
+  const verified = integrityVerified && chainConfirmed;
 
   return {
-    status: verified ? 'CONFIRMED' : 'MISMATCH',
-    reason: verified ? null : 'NFT_CHAIN_EVIDENCE_MISMATCH',
+    status,
+    reason: status === 'MISMATCH' ? 'NFT_CHAIN_EVIDENCE_MISMATCH' : null,
     assetId: String(expectedAssetId),
     mintTxId: receipt.txId,
     blockHeight: receipt.blockHeight == null ? null : String(receipt.blockHeight),
