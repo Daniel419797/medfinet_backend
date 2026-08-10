@@ -22,8 +22,8 @@ function snapshotTouched(input = {}) {
   return SNAPSHOT_INPUT_FIELDS.some((field) => input[field] !== undefined);
 }
 
-function actorDisplayName(context) {
-  const name = String(context?.actorDisplayName || '').trim();
+function actorDisplayName(context, suppliedName) {
+  const name = String(context?.actorDisplayName || suppliedName || '').trim();
   if (!name) {
     throw new DomainError(
       400,
@@ -42,8 +42,12 @@ function completeLocation(values) {
   return normalized;
 }
 
+function supportsCertificateStore(transaction) {
+  return typeof transaction?.$queryRawUnsafe === 'function';
+}
+
 async function readFacilityProfile(transaction, context, facilityId) {
-  if (!facilityId) return null;
+  if (!facilityId || !supportsCertificateStore(transaction)) return null;
   const rows = await transaction.$queryRawUnsafe(
     `SELECT
        facility_id AS "facilityId",
@@ -74,6 +78,16 @@ async function saveFacilityProfile(transaction, context, facilityId, input = {})
   const ward = input.ward === undefined
     ? existing?.ward || null
     : optionalText(input.ward, 'ward');
+  if (!supportsCertificateStore(transaction)) {
+    return {
+      facilityId,
+      organizationId: context.organizationId,
+      state,
+      lga,
+      ward,
+      updatedBySubjectId: context.actorSubjectId,
+    };
+  }
 
   const rows = await transaction.$queryRawUnsafe(
     `INSERT INTO medfinet_certificate.facility_profiles (
@@ -121,6 +135,9 @@ function mergeFacilityProfile(facility, profile) {
 
 async function enrichFacilities(transaction, context, facilities) {
   if (!facilities.length) return facilities;
+  if (!supportsCertificateStore(transaction)) {
+    return facilities.map((facility) => mergeFacilityProfile(facility, null));
+  }
   const ids = facilities.map((facility) => facility.id);
   const rows = await transaction.$queryRawUnsafe(
     `SELECT
@@ -141,6 +158,7 @@ async function enrichFacilities(transaction, context, facilities) {
 }
 
 async function readImmunizationSnapshot(transaction, context, immunizationId) {
+  if (!supportsCertificateStore(transaction)) return null;
   const rows = await transaction.$queryRawUnsafe(
     `SELECT
        immunization_id AS "immunizationId",
@@ -165,7 +183,9 @@ async function readImmunizationSnapshot(transaction, context, immunizationId) {
 }
 
 async function readImmunizationSnapshots(transaction, context, immunizationIds) {
-  if (!immunizationIds.length) return new Map();
+  if (!immunizationIds.length || !supportsCertificateStore(transaction)) {
+    return new Map();
+  }
   const rows = await transaction.$queryRawUnsafe(
     `SELECT
        immunization_id AS "immunizationId",
@@ -192,6 +212,13 @@ async function saveImmunizationSnapshot(
   immunizationId,
   snapshot
 ) {
+  if (!supportsCertificateStore(transaction)) {
+    return {
+      immunizationId,
+      organizationId: context.organizationId,
+      ...snapshot,
+    };
+  }
   const rows = await transaction.$queryRawUnsafe(
     `INSERT INTO medfinet_certificate.immunization_snapshots (
        immunization_id,
@@ -290,7 +317,10 @@ function resolveVaccinator(context, input = {}, existing = null, { initial = fal
   }
   if (mode === 'SELF') {
     return {
-      vaccinatorName: actorDisplayName(context),
+      // Offline sync has no Supabase user object in the worker. It may supply
+      // the authenticated worker's cached display name while the backend still
+      // binds the snapshot to the authenticated actor subject ID.
+      vaccinatorName: actorDisplayName(context, input.vaccinatorName),
       vaccinatorSubjectId: context.actorSubjectId,
     };
   }
@@ -334,13 +364,24 @@ async function buildAmendedImmunizationSnapshot(
   const facilityChanged = input.facilityId !== undefined
     && facilityId !== (existingSnapshot?.facilityId || existingRecord.facilityId || null);
   const location = await facilityLocation(transaction, context, facilityId);
-  const base = facilityChanged
-    ? location?.values || {}
+
+  // Do not reconstruct historical certificate facts from a facility's current
+  // profile. A legacy record without a snapshot must explicitly supply State,
+  // LGA, Ward and vaccinator details from source evidence.
+  const base = existingSnapshot
+    ? (facilityChanged
+      ? location?.values || {}
+      : {
+        facilityName: existingSnapshot.facilityName || location?.values.facilityName,
+        state: existingSnapshot.state || location?.values.state,
+        lga: existingSnapshot.lga || location?.values.lga,
+        ward: existingSnapshot.ward || location?.values.ward,
+      })
     : {
-      facilityName: existingSnapshot?.facilityName || location?.values.facilityName,
-      state: existingSnapshot?.state || location?.values.state,
-      lga: existingSnapshot?.lga || location?.values.lga,
-      ward: existingSnapshot?.ward || location?.values.ward,
+      facilityName: location?.values.facilityName || null,
+      state: null,
+      lga: null,
+      ward: null,
     };
   const normalizedLocation = completeLocation({
     facilityName: input.facilityName === undefined ? base.facilityName : input.facilityName,
