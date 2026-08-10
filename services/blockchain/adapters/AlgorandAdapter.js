@@ -105,7 +105,7 @@ class AlgorandAdapter extends ChainAdapter {
     };
   }
 
-  async mintCertificateNft({ metadataHash, assetName, unitName }, fee) {
+  async prepareCertificateNft({ metadataHash, assetName, unitName }, fee) {
     const digest = Buffer.from(metadataHash || []);
     if (digest.length !== 32) {
       throw new Error('Certificate NFT metadata hash must be exactly 32 bytes');
@@ -125,26 +125,50 @@ class AlgorandAdapter extends ChainAdapter {
         flatFee: true,
       },
     });
-    const signed = txn.signTxn(this.platformAccount.sk);
-    const { txid: txId } = await this.client.sendRawTransaction(signed).do();
+    const txId = txn.txID();
+    if (!txId) throw new Error('Unable to derive certificate NFT transaction ID');
+    return {
+      txId,
+      signedTransaction: Buffer.from(txn.signTxn(this.platformAccount.sk)),
+      network: this.networkId,
+      creatorAddress: addressString(this.platformAccount),
+    };
+  }
+
+  async submitPreparedCertificateNft(prepared) {
+    if (!prepared?.txId || !prepared?.signedTransaction) {
+      throw new Error('Prepared certificate NFT transaction is incomplete');
+    }
+    const submitted = await this.client
+      .sendRawTransaction(Buffer.from(prepared.signedTransaction))
+      .do();
+    const submittedTxId = submitted?.txid || prepared.txId;
+    if (submittedTxId !== prepared.txId) {
+      throw new Error('Algorand returned an unexpected certificate NFT transaction ID');
+    }
     const confirmed = await this._sdk.waitForConfirmation(
       this.client,
-      txId,
+      prepared.txId,
       this._confirmationRounds,
     );
     const confirmedRound = confirmed.confirmedRound;
     const assetId = confirmed.assetIndex ?? confirmed['asset-index'];
     if (!positiveRound(confirmedRound) || assetId === undefined || assetId === null) {
-      throw new Error(`Algorand certificate NFT ${txId} did not confirm with an asset ID`);
+      throw new Error(`Algorand certificate NFT ${prepared.txId} did not confirm with an asset ID`);
     }
     return {
       assetId,
-      txId,
+      txId: prepared.txId,
       blockHeight: confirmedRound,
       confirmations: this._confirmationRounds,
       network: this.networkId,
-      creatorAddress: addressString(this.platformAccount),
+      creatorAddress: prepared.creatorAddress || addressString(this.platformAccount),
     };
+  }
+
+  async mintCertificateNft(input, fee) {
+    const prepared = await this.prepareCertificateNft(input, fee);
+    return this.submitPreparedCertificateNft(prepared);
   }
 
   async getTransaction(txId) {
@@ -200,23 +224,23 @@ class AlgorandAdapter extends ChainAdapter {
         this._requestTimeoutMs,
       );
       const params = asset?.params || {};
+      const metadataHash = params.metadataHash ?? params['metadata-hash'] ?? null;
+      const defaultFrozen = params.defaultFrozen ?? params['default-frozen'] ?? null;
       return {
         lookupStatus: 'FOUND',
-        assetId: asset?.index ?? assetId,
-        creator: addressString(params.creator),
-        total: params.total ?? null,
-        decimals: params.decimals ?? null,
-        defaultFrozen: Boolean(params.defaultFrozen),
+        assetId: asset?.index ?? asset?.['asset-id'] ?? null,
+        creator: addressString(params.creator ?? params['creator']),
+        total: params.total ?? params['total'] ?? null,
+        decimals: params.decimals ?? params['decimals'] ?? null,
+        defaultFrozen: defaultFrozen === null ? null : Boolean(defaultFrozen),
         unitName: params.unitName ?? params['unit-name'] ?? null,
         assetName: params.name ?? params.assetName ?? params['asset-name'] ?? null,
-        url: params.url || null,
-        metadataHash: params.metadataHash
-          ? Buffer.from(params.metadataHash)
-          : null,
-        manager: addressString(params.manager),
-        reserve: addressString(params.reserve),
-        freeze: addressString(params.freeze),
-        clawback: addressString(params.clawback),
+        url: params.url ?? params['url'] ?? null,
+        metadataHash: metadataHash ? Buffer.from(metadataHash) : null,
+        manager: addressString(params.manager ?? params['manager']),
+        reserve: addressString(params.reserve ?? params['reserve']),
+        freeze: addressString(params.freeze ?? params['freeze']),
+        clawback: addressString(params.clawback ?? params['clawback']),
       };
     } catch (error) {
       if (isNotFound(error)) {
