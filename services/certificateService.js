@@ -454,7 +454,11 @@ function createCertificateService(
           errorType: error?.name || 'Error',
           errorCode: error?.code || null,
         });
-        nftEvidence = { ...nftBase, status: 'UNAVAILABLE' };
+        nftEvidence = {
+          ...nftBase,
+          status: 'UNAVAILABLE',
+          reason: 'NFT_VERIFICATION_UNAVAILABLE',
+        };
       }
     }
 
